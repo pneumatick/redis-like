@@ -23,7 +23,8 @@ impl Command {
 }
 
 fn handle_client(mut stream: TcpStream) -> Result<()> {
-    let mut buffer = [0; 512];
+    // Command: 1 byte; Key size: 8 bytes; Value size: 8 bytes
+    let mut buffer = [0; 17];
 
     loop {
         let bytes_read = stream.read(&mut buffer)?;
@@ -32,18 +33,35 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
         if bytes_read != 0 {
             println!("Received {} bytes: {:?}", bytes_read, &buffer[..bytes_read]);
 
-            // If the data is expected to be a UTF-8 string, you can convert it.
-            // Be cautious as TCP streams can contain arbitrary bytes.
-            /*
-            match std::str::from_utf8(&buffer[..bytes_read]) {
-                Ok(message) => println!("Message: {}", message),
-                Err(e) => eprintln!("Could not parse as utf8: {}", e),
-            }
-            */
+            // Get the key size
+            let k_size_bytes: [u8; 8] = buffer[1..9]
+                .try_into()
+                .expect("Slice length mismatch");
+            let k_size = u64::from_be_bytes(k_size_bytes);
+
+            // Determine the command
             match Command::from_byte(buffer[0])? {
-                Command::SET => { println!("SET received"); }
-                Command::GET => { println!("GET received"); }
-                Command::DEL => { println!("DEL received"); }
+                Command::SET => { 
+                    println!("SET received"); 
+
+                    // Get the value size
+                    let v_size_bytes: [u8; 8] = buffer[9..17]
+                        .try_into()
+                        .expect("Slice length mismatch");
+                    let v_size = u64::from_be_bytes(v_size_bytes);
+
+                    println!("Key size: {}, Value size: {}", k_size, v_size);
+                }
+                Command::GET => { 
+                    println!("GET received"); 
+
+                    println!("Key size: {}", k_size);
+                }
+                Command::DEL => { 
+                    println!("DEL received"); 
+
+                    println!("Key size: {}", k_size);
+                }
             }
         } 
         // Handle client disconnect

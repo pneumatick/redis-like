@@ -4,6 +4,24 @@ use std::net::{TcpListener, TcpStream};
 type Error = Box<dyn std::error::Error>; 
 type Result<T> = std::result::Result<T, Error>; 
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    SET = 0,
+    GET = 1,
+    DEL = 2,
+}
+
+impl Command {
+    pub fn from_byte(byte: u8) -> Result<Command> {
+        match byte {
+            0 => Ok(Command::SET),
+            1 => Ok(Command::GET),
+            2 => Ok(Command::DEL),
+            _ => Err(Box::from("Unknown command")),
+        }
+    }
+}
+
 fn handle_client(mut stream: TcpStream) -> Result<()> {
     let mut buffer = [0; 512];
 
@@ -16,9 +34,16 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
 
             // If the data is expected to be a UTF-8 string, you can convert it.
             // Be cautious as TCP streams can contain arbitrary bytes.
+            /*
             match std::str::from_utf8(&buffer[..bytes_read]) {
                 Ok(message) => println!("Message: {}", message),
                 Err(e) => eprintln!("Could not parse as utf8: {}", e),
+            }
+            */
+            match Command::from_byte(buffer[0])? {
+                Command::SET => { println!("SET received"); }
+                Command::GET => { println!("GET received"); }
+                Command::DEL => { println!("DEL received"); }
             }
         } 
         // Handle client disconnect

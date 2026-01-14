@@ -22,6 +22,15 @@ impl Command {
     }
 }
 
+fn extract_data(stream: &mut TcpStream, size: u64) -> Result<Vec<u8>> {
+    let size = size as usize;
+    let mut buffer = vec![0u8; size];
+
+    stream.read_exact(&mut buffer)?;
+
+    Ok(buffer)
+}
+
 fn handle_client(mut stream: TcpStream) -> Result<()> {
     // Command: 1 byte; Key size: 8 bytes; Value size: 8 bytes
     let mut buffer = [0; 17];
@@ -40,6 +49,7 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
             let k_size = u64::from_be_bytes(k_size_bytes);
 
             // Determine the command
+            // NOTE: Repeated debug code below; Encapsulate in function later
             match Command::from_byte(buffer[0])? {
                 Command::SET => { 
                     println!("SET received"); 
@@ -51,16 +61,45 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
                     let v_size = u64::from_be_bytes(v_size_bytes);
 
                     println!("Key size: {}, Value size: {}", k_size, v_size);
+
+                    // Get the key and value as bytes
+                    let key_bytes = extract_data(&mut stream, k_size)?;
+                    let value_bytes = extract_data(&mut stream, v_size)?;
+
+                    // Display the data as bytes
+                    println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
+                    println!("Value bytes: {:?}", &value_bytes[..v_size as usize]);
+                    // Display the data as strings
+                    println!("Key string: {}", String::from_utf8(key_bytes).expect("Invalid UTF-8 in key bytes"));
+                    println!("Value string: {}", String::from_utf8(value_bytes).expect("Invalid UTF-8 in value bytes"));
                 }
                 Command::GET => { 
                     println!("GET received"); 
 
                     println!("Key size: {}", k_size);
+
+                    // Get the key as bytes
+                    let key_bytes = extract_data(&mut stream, k_size)?;
+
+                    // Display the data as bytes
+                    println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
+
+                    // Display the data as strings
+                    println!("Key string: {}", String::from_utf8(key_bytes).expect("Invalid UTF-8 in key bytes"));
                 }
                 Command::DEL => { 
                     println!("DEL received"); 
 
                     println!("Key size: {}", k_size);
+
+                    // Get the key as bytes
+                    let key_bytes = extract_data(&mut stream, k_size)?;
+
+                    // Display the data as bytes
+                    println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
+
+                    // Display the data as strings
+                    println!("Key string: {}", String::from_utf8(key_bytes).expect("Invalid UTF-8 in key bytes"));
                 }
             }
         } 

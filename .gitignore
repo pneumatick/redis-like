@@ -2,3 +2,5 @@
 *.swp
 /src/*.swp
 TODO.md
+*.py
+*.bin

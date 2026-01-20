@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
+use std::collections::HashMap;
 
 type Error = Box<dyn std::error::Error>; 
 type Result<T> = std::result::Result<T, Error>; 
@@ -31,7 +32,7 @@ fn extract_data(stream: &mut TcpStream, size: u64) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
-fn handle_client(mut stream: TcpStream) -> Result<()> {
+fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usize)>) -> Result<()> {
     // Command: 1 byte; Key size: 8 bytes; Value size: 8 bytes
     let mut buffer = [0; 17];
 
@@ -69,9 +70,17 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
                     // Display the data as bytes
                     println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
                     println!("Value bytes: {:?}", &value_bytes[..v_size as usize]);
-                    // Display the data as strings
-                    println!("Key string: {}", String::from_utf8(key_bytes).expect("Invalid UTF-8 in key bytes"));
-                    println!("Value string: {}", String::from_utf8(value_bytes).expect("Invalid UTF-8 in value bytes"));
+
+                    // Insert data into hash map (assuming string as value)
+                    map.insert(key_bytes, (value_bytes, 0));
+
+                    // Print status of hash map for testing purposes
+                    // (assuming string as key and value)
+                    for (key, value) in &mut *map {
+                        let key_str = std::str::from_utf8(&key).expect("Invalid UTF-8 in key bytes");
+                        let val_str = std::str::from_utf8(&value.0).expect("Invalid UTF-8 in value bytes");
+                        println!("{}: {}", key_str, val_str);
+                    }
                 }
                 Command::GET => { 
                     println!("GET received"); 
@@ -114,9 +123,10 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
 
 fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:43210")?;
+    let mut map: HashMap<Vec<u8>, (Vec<u8>, usize)> = HashMap::new();
 
     for stream in listener.incoming() {
-        let result = handle_client(stream?);
+        let result = handle_client(stream?, &mut map);
 
         match result {
             Ok(_) => { println!{"Client connection closed"}; }

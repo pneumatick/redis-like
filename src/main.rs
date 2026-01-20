@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::collections::HashMap;
+use std::io::Write;
 
 type Error = Box<dyn std::error::Error>; 
 type Result<T> = std::result::Result<T, Error>; 
@@ -74,6 +75,9 @@ fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usi
                     // Insert data into hash map (assuming string as value)
                     map.insert(key_bytes, (value_bytes, 0));
 
+                    // Announce insertion to the client
+                    let _ = stream.write("Insertion successful\n".as_bytes());
+
                     // Print status of hash map for testing purposes
                     // (assuming string as key and value)
                     for (key, value) in &mut *map {
@@ -102,9 +106,14 @@ fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usi
                         let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
                          
                         println!("Key: {}\nValue: {}", key_str, val_str);
+
+                        // Send value to the client 
+                        // (as string for now)
+                        let _ = stream.write(val_str.as_bytes());
                     }
                     else {
-                        println!("GET Error: No key matching {}", key_str);
+                        let message = format!("GET Error: No key matching \"{}\"\n", key_str);
+                        let _ = stream.write(message.as_bytes());
                     }
                 }
                 Command::DEL => { 
@@ -127,9 +136,13 @@ fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usi
                         let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
                          
                         println!("Key: {}\nValue: {}", key_str, val_str);
+
+                        // Announce deletion to the client
+                        let _ = stream.write("Deletion successful".as_bytes());
                     }
                     else {
-                        println!("DEL Error: No key matching {}", key_str);
+                        let message = format!("DEL Error: No key matching \"{}\"\n", key_str);
+                        let _ = stream.write(message.as_bytes());
                     }
                 }
             }

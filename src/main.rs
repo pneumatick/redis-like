@@ -93,8 +93,19 @@ fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usi
                     // Display the data as bytes
                     println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
 
-                    // Display the data as strings
-                    println!("Key string: {}", String::from_utf8(key_bytes).expect("Invalid UTF-8 in key bytes"));
+                    // Get the data from the hash map
+                    let result = map.get(&key_bytes);
+
+                    let key_str = std::str::from_utf8(&key_bytes).expect("Invalid UTF-8 in key bytes");
+                    if result.is_some() {
+                        let (value_bytes, _) = result.unwrap();
+                        let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
+                         
+                        println!("Key: {}\nValue: {}", key_str, val_str);
+                    }
+                    else {
+                        println!("GET Error: No key matching {}", key_str);
+                    }
                 }
                 Command::DEL => { 
                     println!("DEL received"); 
@@ -107,8 +118,19 @@ fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usi
                     // Display the data as bytes
                     println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
 
-                    // Display the data as strings
-                    println!("Key string: {}", String::from_utf8(key_bytes).expect("Invalid UTF-8 in key bytes"));
+                    // Delete the data from the hash map
+                    let result = map.remove(&key_bytes);
+
+                    let key_str = std::str::from_utf8(&key_bytes).expect("Invalid UTF-8 in key bytes");
+                    if result.is_some() {
+                        let (value_bytes, _) = result.unwrap();
+                        let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
+                         
+                        println!("Key: {}\nValue: {}", key_str, val_str);
+                    }
+                    else {
+                        println!("DEL Error: No key matching {}", key_str);
+                    }
                 }
             }
         } 

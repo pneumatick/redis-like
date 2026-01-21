@@ -24,6 +24,9 @@ impl Command {
     }
 }
 
+// Extract data from a TcpStream according to the specified byte size.
+// NOTE: Trusting a declared buffer size is unsafe in real-world systems 
+// due to out-of-bounds data extraction.
 fn extract_data(stream: &mut TcpStream, size: u64) -> Result<Vec<u8>> {
     let size = size as usize;
     let mut buffer = vec![0u8; size];
@@ -34,122 +37,122 @@ fn extract_data(stream: &mut TcpStream, size: u64) -> Result<Vec<u8>> {
 }
 
 fn handle_client(mut stream: TcpStream, map: &mut HashMap<Vec<u8>, (Vec<u8>, usize)>) -> Result<()> {
-    // Command: 1 byte; Key size: 8 bytes; Value size: 8 bytes
+    // Command Header: 1 byte; Key size: 8 bytes; Value size: 8 bytes
     let mut buffer = [0; 17];
 
     loop {
+        // Read command header
         let bytes_read = stream.read(&mut buffer)?;
 
-        // Handle incoming data
-        if bytes_read != 0 {
-            println!("Received {} bytes: {:?}", bytes_read, &buffer[..bytes_read]);
+        // Handle client disconnect
+        if bytes_read == 0 {
+            break;
+        }
 
-            // Get the key size
-            let k_size_bytes: [u8; 8] = buffer[1..9]
-                .try_into()
-                .expect("Slice length mismatch");
-            let k_size = u64::from_be_bytes(k_size_bytes);
+        println!("Received {} bytes: {:?}", bytes_read, &buffer[..bytes_read]);
 
-            // Determine the command
-            // NOTE: Repeated debug code below; Encapsulate in function later
-            match Command::from_byte(buffer[0])? {
-                Command::SET => { 
-                    println!("SET received"); 
+        // Get the key bytes
+        let k_size_bytes: [u8; 8] = buffer[1..9]
+            .try_into()
+            .expect("Slice length mismatch");
+        let k_size = u64::from_be_bytes(k_size_bytes);
+        let key_bytes = extract_data(&mut stream, k_size)?;
 
-                    // Get the value size
-                    let v_size_bytes: [u8; 8] = buffer[9..17]
-                        .try_into()
-                        .expect("Slice length mismatch");
-                    let v_size = u64::from_be_bytes(v_size_bytes);
+        // Get the command or restart loop if invalid
+        let command = match Command::from_byte(buffer[0]) {
+            Ok(c) => c,
+            Err(e) => {
+                // Print and send error message
+                let message = format!("An error occurred: {}", e);
+                eprintln!("{}", message);
+                let _ = stream.write(message.as_bytes());
 
-                    println!("Key size: {}, Value size: {}", k_size, v_size);
+                // Restart loop
+                continue;
+            }
+        };
 
-                    // Get the key and value as bytes
-                    let key_bytes = extract_data(&mut stream, k_size)?;
-                    let value_bytes = extract_data(&mut stream, v_size)?;
+        // Determine the command type and execute it
+        match command {
+            Command::SET => { 
+                // Get the value size
+                let v_size_bytes: [u8; 8] = buffer[9..17]
+                    .try_into()
+                    .expect("Slice length mismatch");
+                let v_size = u64::from_be_bytes(v_size_bytes);
 
-                    // Display the data as bytes
-                    println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
-                    println!("Value bytes: {:?}", &value_bytes[..v_size as usize]);
+                println!("SET received: Key size = {}, Value size = {}", k_size, v_size);
 
-                    // Insert data into hash map (assuming string as value)
-                    map.insert(key_bytes, (value_bytes, 0));
+                // Get the value as bytes
+                let value_bytes = extract_data(&mut stream, v_size)?;
 
-                    // Announce insertion to the client
-                    let _ = stream.write("Insertion successful\n".as_bytes());
+                // Display the data as bytes
+                println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
+                println!("Value bytes: {:?}", &value_bytes[..v_size as usize]);
 
-                    // Print status of hash map for testing purposes
-                    // (assuming string as key and value)
-                    for (key, value) in &mut *map {
-                        let key_str = std::str::from_utf8(&key).expect("Invalid UTF-8 in key bytes");
-                        let val_str = std::str::from_utf8(&value.0).expect("Invalid UTF-8 in value bytes");
-                        println!("{}: {}", key_str, val_str);
-                    }
-                }
-                Command::GET => { 
-                    println!("GET received"); 
+                // Insert data into hash map (assuming string as value)
+                map.insert(key_bytes, (value_bytes, 0));
 
-                    println!("Key size: {}", k_size);
+                // Announce insertion to the client
+                let _ = stream.write("Insertion successful\n".as_bytes());
 
-                    // Get the key as bytes
-                    let key_bytes = extract_data(&mut stream, k_size)?;
-
-                    // Display the data as bytes
-                    println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
-
-                    // Get the data from the hash map
-                    let result = map.get(&key_bytes);
-
-                    let key_str = std::str::from_utf8(&key_bytes).expect("Invalid UTF-8 in key bytes");
-                    if result.is_some() {
-                        let (value_bytes, _) = result.unwrap();
-                        let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
-                         
-                        println!("Key: {}\nValue: {}", key_str, val_str);
-
-                        // Send value to the client 
-                        // (as string for now)
-                        let _ = stream.write(val_str.as_bytes());
-                    }
-                    else {
-                        let message = format!("GET Error: No key matching \"{}\"\n", key_str);
-                        let _ = stream.write(message.as_bytes());
-                    }
-                }
-                Command::DEL => { 
-                    println!("DEL received"); 
-
-                    println!("Key size: {}", k_size);
-
-                    // Get the key as bytes
-                    let key_bytes = extract_data(&mut stream, k_size)?;
-
-                    // Display the data as bytes
-                    println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
-
-                    // Delete the data from the hash map
-                    let result = map.remove(&key_bytes);
-
-                    let key_str = std::str::from_utf8(&key_bytes).expect("Invalid UTF-8 in key bytes");
-                    if result.is_some() {
-                        let (value_bytes, _) = result.unwrap();
-                        let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
-                         
-                        println!("Key: {}\nValue: {}", key_str, val_str);
-
-                        // Announce deletion to the client
-                        let _ = stream.write("Deletion successful".as_bytes());
-                    }
-                    else {
-                        let message = format!("DEL Error: No key matching \"{}\"\n", key_str);
-                        let _ = stream.write(message.as_bytes());
-                    }
+                // Print status of hash map for testing purposes
+                // (assuming string as key and value)
+                for (key, value) in &mut *map {
+                    let key_str = std::str::from_utf8(&key).expect("Invalid UTF-8 in key bytes");
+                    let val_str = std::str::from_utf8(&value.0).expect("Invalid UTF-8 in value bytes");
+                    println!("{}: {}", key_str, val_str);
                 }
             }
-        } 
-        // Handle client disconnect
-        else {
-            break;
+            Command::GET => { 
+                println!("GET received: Key size = {}", k_size);
+
+                // Display the data as bytes
+                println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
+
+                // Get the data from the hash map
+                let result = map.get(&key_bytes);
+
+                let key_str = std::str::from_utf8(&key_bytes).expect("Invalid UTF-8 in key bytes");
+                if result.is_some() {
+                    let (value_bytes, _) = result.unwrap();
+                    let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
+                     
+                    println!("Key: {}\nValue: {}", key_str, val_str);
+
+                    // Send value to the client 
+                    // (as string for now)
+                    let _ = stream.write(val_str.as_bytes());
+                }
+                else {
+                    let message = format!("GET Error: No key matching \"{}\"\n", key_str);
+                    let _ = stream.write(message.as_bytes());
+                }
+            }
+            Command::DEL => { 
+                println!("DEL received: Key size = {}", k_size);
+
+                // Display the data as bytes
+                println!("Key bytes: {:?}", &key_bytes[..k_size as usize]);
+
+                // Delete the data from the hash map
+                let result = map.remove(&key_bytes);
+
+                let key_str = std::str::from_utf8(&key_bytes).expect("Invalid UTF-8 in key bytes");
+                if result.is_some() {
+                    let (value_bytes, _) = result.unwrap();
+                    let val_str = std::str::from_utf8(&value_bytes).expect("Invalid UTF-8 in value bytes");
+                     
+                    println!("Key: {}\nValue: {}", key_str, val_str);
+
+                    // Announce deletion to the client
+                    let _ = stream.write("Deletion successful".as_bytes());
+                }
+                else {
+                    let message = format!("DEL Error: No key matching \"{}\"\n", key_str);
+                    let _ = stream.write(message.as_bytes());
+                }
+            }
         }
     }
 
@@ -165,7 +168,7 @@ fn main() -> Result<()> {
 
         match result {
             Ok(_) => { println!{"Client connection closed"}; }
-            Err(e) => { eprintln!{"An client error occurred: {}", e}; }
+            Err(e) => { eprintln!{"A client error occurred: {}", e}; }
         }
     }
 

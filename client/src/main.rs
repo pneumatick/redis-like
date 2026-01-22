@@ -38,6 +38,11 @@ fn main() {
     if let Ok(mut stream) = TcpStream::connect("127.0.0.1:43210") {
         println!("Connected to the server!");
         stream.write_all(&buffer);
+        // Probably not the best idea. Review later...
+        //let mut read_buff = Vec::<u8>::new();
+        let mut read_buff: Vec<u8> = vec![0; 1024];
+        stream.read(&mut read_buff);
+        println!("{}", String::from_utf8(read_buff).unwrap());
     }
     else {
         println!("Couldn't connect to server...");

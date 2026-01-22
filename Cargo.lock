@@ -3,5 +3,19 @@
 version = 4
 
 [[package]]
-name = "redis-like"
+name = "common"
 version = "0.1.0"
+
+[[package]]
+name = "redis-like-client"
+version = "0.1.0"
+dependencies = [
+ "common",
+]
+
+[[package]]
+name = "redis-like-server"
+version = "0.1.0"
+dependencies = [
+ "common",
+]

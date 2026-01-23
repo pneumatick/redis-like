@@ -17,31 +17,37 @@ fn get_arg_string() -> Result<String> {
 }
 
 fn prepare_command() -> Result<Vec<u8>> {
-    // Get the command from the user
+    // Get the command and relevant data from the user
     println!("Enter the command type: ");
-    let cmd = get_arg_string()?;
+    let cmd = Command::from_string(get_arg_string()?)?;
 
     println!("\nEnter the key: ");
     let key = get_arg_string()?;
 
-    println!("\nEnter the value: ");
-    let val = get_arg_string()?;
+    let mut val = String::new();
+    if cmd == Command::SET {
+        println!("\nEnter the value: ");
+        val = get_arg_string()?;
+    }
 
-    // Convert header strings to bytes
-    let command: u8 = cmd.parse().expect("Failed to parse cmd");
+    // Convert header data to bytes
+    let command: u8 = Command::to_byte(cmd);
     let key_size: u64 = key.len().try_into().unwrap();
     let val_size: u64 = val.len().try_into().unwrap();
 
-    // Convert key and values to bytes
+    // Convert key to bytes
     let key_bytes = key.as_bytes();
-    let val_bytes = val.as_bytes();
 
     // Pack data into buffer
     let mut buffer: Vec<u8> = vec![command];
     buffer.extend(key_size.to_be_bytes());
     buffer.extend(val_size.to_be_bytes());
     buffer.extend(key_bytes);
-    buffer.extend(val_bytes);
+    // When applicable, convert value to bytes and append to buffer
+    if cmd == Command::SET {
+        let val_bytes = val.as_bytes();
+        buffer.extend(val_bytes);
+    }
 
     Ok(buffer)
 }

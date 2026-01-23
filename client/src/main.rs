@@ -1,20 +1,31 @@
-use std::io::Read;
-use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write, stdin};
+use std::net::TcpStream;
 
 use common::{Command};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
-fn handle_client(mut stream: TcpStream) -> Result<()> {
-    Ok(())
+fn get_arg_string() -> Result<String> {
+    let mut s = String::new();
+    stdin()
+        .read_line(&mut s)
+        .expect("Failed to read user input");
+    s = s.trim().to_string();
+
+    Ok(s)
 }
 
-fn main() {
-    let cmd = "0";
-    let key = "apple";
-    let val = "orange";
+fn prepare_command() -> Result<Vec<u8>> {
+    // Get the command from the user
+    println!("Enter the command type: ");
+    let cmd = get_arg_string()?;
+
+    println!("\nEnter the key: ");
+    let key = get_arg_string()?;
+
+    println!("\nEnter the value: ");
+    let val = get_arg_string()?;
 
     // Convert header strings to bytes
     let command: u8 = cmd.parse().expect("Failed to parse cmd");
@@ -32,17 +43,33 @@ fn main() {
     buffer.extend(key_bytes);
     buffer.extend(val_bytes);
 
-    println!("{:?}", buffer);
+    Ok(buffer)
+}
 
+fn main() {
     // Establish connection with server
     if let Ok(mut stream) = TcpStream::connect("127.0.0.1:43210") {
         println!("Connected to the server!");
-        stream.write_all(&buffer);
-        // Probably not the best idea. Review later...
-        //let mut read_buff = Vec::<u8>::new();
-        let mut read_buff: Vec<u8> = vec![0; 1024];
-        stream.read(&mut read_buff);
-        println!("{}", String::from_utf8(read_buff).unwrap());
+
+        loop {
+            // Prepare command data
+            let buffer = match prepare_command() {
+                Err(e) => {
+                    eprintln!("{e}");
+                    continue;
+                },
+                Ok(buff) => buff,
+            };
+            println!("\nMessage bytes:\n{:?}", buffer);
+
+            // Send command to the server
+            let _ = stream.write_all(&buffer);
+
+            // Read and display the server's response
+            let mut read_buff: Vec<u8> = vec![0; 1024];
+            let _ = stream.read(&mut read_buff);
+            println!("\nServer response:\n{}", String::from_utf8(read_buff).unwrap());
+        }
     }
     else {
         println!("Couldn't connect to server...");

@@ -167,3 +167,54 @@ fn write_line<W: Write>(
     writer.write_all(text.as_bytes())?;
     writer.write_all(b"\r\n")
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn parses_get_request() {
+        let bytes = b"*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n";
+        let mut reader = Cursor::new(bytes);
+
+        let request = read_request(&mut reader).unwrap().unwrap();
+
+        assert_eq!(
+            request,
+            vec![b"GET".to_vec(), b"foo".to_vec()]
+        );
+    }
+
+    #[test]
+    fn encodes_null_bulk_string() {
+        let mut output = Vec::new();
+
+        write_response(
+            &mut output,
+            &RespValue::BulkString(None)
+        ).unwrap();
+
+        assert_eq!(output, b"$-1\r\n");
+    }
+
+    #[test]
+    fn parses_pipelined_requests() {
+        let bytes = b"*1\r\n$4\r\nPING\r\n\
+                      *2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n";
+
+        let mut reader = Cursor::new(bytes);
+
+        let first = read_request(&mut reader).unwrap().unwrap();
+        let second = read_request(&mut reader).unwrap().unwrap();
+
+        assert_eq!(first, vec![b"PING".to_vec()]);
+        assert_eq!(
+            second,
+            vec![b"GET".to_vec(), b"foo".to_vec()]
+        );
+
+        assert!(read_request(&mut reader).unwrap().is_none());
+    }
+}

@@ -4,6 +4,16 @@ const MAX_ARGS: usize = 1024;
 const MAX_BULK_SIZE: usize = 1024 * 1024;
 const MAX_REQUEST_SIZE: usize = 4 * 1024 * 1024;
 
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RespValue {
+    SimpleString(String),
+    Error(String),
+    Integer(i64),
+    BulkString(Option<Vec<u8>>),
+    Array(Option<Vec<RespValue>>),
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
 }
@@ -97,4 +107,63 @@ pub fn read_request<R: BufRead>(
     }
 
     Ok(Some(args))
+}
+
+// Write the response for the client
+pub fn write_response<W: Write>(
+    writer: &mut W,
+    value: &RespValue,
+) -> io::Result<()> {
+    match value {
+        RespValue::SimpleString(s) => {
+            write_line(writer, b'+', s)
+        }
+
+        RespValue::Error(s) => {
+            write_line(writer, b'-', s)
+        }
+
+        RespValue::Integer(n) => {
+            write!(writer, ":{n}\r\n")
+        }
+
+        RespValue::BulkString(None) => {
+            writer.write_all(b"$-1\r\n")
+        }
+
+        RespValue::BulkString(Some(bytes)) => {
+            write!(writer, "${}\r\n", bytes.len())?;
+            writer.write_all(bytes)?;
+            writer.write_all(b"\r\n")
+        }
+
+        RespValue::Array(None) => {
+            writer.write_all(b"*-1\r\n")
+        }
+
+        RespValue::Array(Some(items)) => {
+            write!(writer, "*{}\r\n", items.len())?;
+
+            for item in items {
+                write_response(writer, item)?;
+            }
+
+            Ok(())
+        }
+    }
+}
+
+// RESP simple strings and error cannot contain CR or LF.
+fn write_line<W: Write>(
+    writer: &mut W,
+    prefix: u8,
+    text: &str,
+) -> io::Result<()> {
+    if text.bytes().any(|b| b == b'\r' || b == b'\n') {
+        return Err(invalid("Invalid RESP line"));
+    }
+
+    writer.write_all(&[prefix])?;
+    writer.write_all(text.as_bytes())?;
+    writer.write_all(b"\r\n")
 }

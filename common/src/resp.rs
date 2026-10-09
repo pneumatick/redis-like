@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 
 const MAX_ARGS: usize = 1024;
 const MAX_BULK_SIZE: usize = 1024 * 1024;

@@ -20,10 +20,12 @@ fn extract_data(stream: &mut TcpStream, size: u64) -> Result<Vec<u8>> {
 }
 
 fn extract_k_or_v(stream: &mut TcpStream, buffer: &[u8]) -> Result<(Vec<u8>, u64)> {
+    println!("Extracting key/value...");
     let size_bytes: [u8; 8] = buffer
         .try_into()
         .expect("Slice length mismatch");
     let size = u64::from_be_bytes(size_bytes);
+    println!("Size of incoming data: {}", size);
     let bytes = extract_data(stream, size)?;
 
     Ok((bytes, size))
@@ -130,6 +132,7 @@ pub fn handle_command(mut stream: TcpStream) -> Result<()> {
 
         // Print status of hash map for testing purposes
         // (assuming string as key and value)
+        /*
         println!("\nMap state:");
         for (key, value) in &mut *map {
             let key_str = std::str::from_utf8(&key).expect("Invalid UTF-8 in key bytes");
@@ -137,6 +140,7 @@ pub fn handle_command(mut stream: TcpStream) -> Result<()> {
             println!("Key: {} : Value: {}", key_str, val_str);
         }
         println!("");
+        */
     }
 
     Ok(())

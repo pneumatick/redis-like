@@ -1,15 +1,14 @@
 mod command;
 mod db;
 
+use std::io;
 use std::net::{TcpListener, TcpStream};
 
-use common::{Result, Error};
-
-fn handle_client(stream: TcpStream) -> Result<()> {
+fn handle_client(stream: TcpStream) -> io::Result<()> {
     command::handle_command(stream)
 }
 
-fn main() -> Result<()> {
+fn main() -> io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:43210")?;
 
     for stream in listener.incoming() {

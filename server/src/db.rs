@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
 
-static MAP: OnceLock<RwLock<HashMap<Vec<u8>, Vec<u8>>>> = OnceLock::new();
 pub struct Database {
     entries: HashMap<Vec<u8>, Vec<u8>>
 }
@@ -44,4 +42,5 @@ impl std::fmt::Display for DbError {
 
 impl std::error::Error for DbError {}
 
-pub type DbResult<T> = Result<T, DbError>;
+// NOTE: To be used when implementing commands that may fail in the database
+//pub type DbResult<T> = Result<T, DbError>;

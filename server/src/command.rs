@@ -108,10 +108,10 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     else if command.eq_ignore_ascii_case(b"EXPIRE") {
         match args {
             [key, expire_in_str] => {
-                let expire_slice = std::str::from_utf8(expire_in_str)
-                    .expect("Invalid UTF-8 sequence");
-                let expire_in = expire_slice
-                    .parse()
+                // NOTE: Replace expect with proper error handling
+                let expire_in = std::str::from_utf8(expire_in_str)
+                    .expect("Invalid UTF-8 sequence")
+                    .parse::<u64>()
                     .expect("Not a valid integer");
 
                 match execute_expire(key, expire_in, db) {

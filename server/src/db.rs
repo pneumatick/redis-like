@@ -40,7 +40,8 @@ impl Database {
         self.entries.remove(key).is_some()
     }
 
-    pub fn expire(&mut self, key: &[u8], expire_in: u64) -> Result<bool, DbError> {
+    // NOTE: Returns Result<> because an actual error (overflow) can occur
+    pub fn expire(&mut self, key: &[u8], expire_in: u64) -> DbResult<bool> {
         if expire_in == 0 {
 
         }
@@ -96,5 +97,4 @@ impl std::fmt::Display for DbError {
 
 impl std::error::Error for DbError {}
 
-// NOTE: To be used when implementing commands that may fail in the database
-//pub type DbResult<T> = Result<T, DbError>;
+pub type DbResult<T> = Result<T, DbError>;

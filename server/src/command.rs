@@ -105,6 +105,27 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
 
         RespValue::Integer(deleted)
     } 
+    else if command.eq_ignore_ascii_case(b"EXPIRE") {
+        match args {
+            [key, expire_in_str] => {
+                let expire_slice = std::str::from_utf8(expire_in_str)
+                    .expect("Invalid UTF-8 sequence");
+                let expire_in = expire_slice
+                    .parse()
+                    .expect("Not a valid integer");
+
+                match execute_expire(key, expire_in, db) {
+                    Ok(result) => { RespValue::Integer(result.into()) }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+
+                        RespValue::Error("Err internal server error".into())
+                    }
+                }
+            }
+            _ => wrong_arity()
+        }
+    }
     else {
         RespValue::Error("ERR unknown command".into())
     }
@@ -139,4 +160,15 @@ fn execute_del(
         .map_err(|_| DbError::LockPoisoned)?;
 
     Ok(guard.del(key))
+}
+
+fn execute_expire(
+    key: &[u8],
+    expire_in: u64,
+    db: &Arc<RwLock<Database>>
+) -> Result<bool, DbError> {
+    let mut guard = db.write()
+        .map_err(|_| DbError::LockPoisoned)?;
+
+    guard.expire(key, expire_in)
 }

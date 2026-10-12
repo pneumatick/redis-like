@@ -3,21 +3,25 @@ mod db;
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, RwLock};
 
-fn handle_client(stream: TcpStream) -> io::Result<()> {
-    command::handle_command(stream)
+fn handle_client(stream: TcpStream, db: &Arc<RwLock<db::Database>>) -> io::Result<()> {
+    command::handle_command(stream, db)
 }
 
 fn main() -> io::Result<()> {
+    let db = Arc::new(RwLock::new(db::Database::new()));
     let listener = TcpListener::bind("127.0.0.1:43210")?;
 
     for stream in listener.incoming() {
-        let result = handle_client(stream?);
+        let stream = stream?;
+        let db = Arc::clone(&db); 
 
-        match result {
-            Ok(_) => { println!{"Client connection closed"}; }
-            Err(e) => { eprintln!{"A client error occurred: {}", e}; }
-        }
+        std::thread::spawn(move || {
+            if let Err(error) = handle_client(stream, &db) {
+                eprintln!("Client error: {error}");
+            }
+        });
     }
 
     Ok(())

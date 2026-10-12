@@ -49,8 +49,15 @@ fn execute(request: &[Vec<u8>]) -> RespValue {
     else if command.eq_ignore_ascii_case(b"SET") {
         match args {
             [key, value] => {
-                db::set(key.clone(), (value.clone(), 0));
-                RespValue::SimpleString("OK".into())
+                match db::set(key.clone(), (value.clone(), 0)) {
+                    Ok(()) => { RespValue::SimpleString("OK".into()) }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+                        RespValue::Error("Err internal server error".into())
+                    }
+
+                }
+                
             }
             _ => wrong_arity(),
         }
@@ -59,10 +66,12 @@ fn execute(request: &[Vec<u8>]) -> RespValue {
         match args {
             [key] => {
                 match db::get(key) {
-                    Some((value, _)) => {
-                        RespValue::BulkString(Some(value))
+                    Ok(Some((value, _))) => { RespValue::BulkString(Some(value)) }
+                    Ok(None) => { RespValue::BulkString(None) }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+                        RespValue::Error("Err internal server error".into())
                     }
-                    None => RespValue::BulkString(None),
                 }
             }
             _ => wrong_arity(),
@@ -76,7 +85,16 @@ fn execute(request: &[Vec<u8>]) -> RespValue {
         let mut deleted = 0i64;
 
         for key in args {
-            if db::del(key) {
+            let success = match db::del(key) {
+                Ok(result) => { result }
+                Err(error) => {
+                    eprintln!("Database error: {error}");
+
+                    return RespValue::Error("ERR internal server error".into())
+                }
+            };
+
+            if success {
                 deleted += 1;
             }
         }

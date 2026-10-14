@@ -95,12 +95,27 @@ impl Database {
                             Ok(TTL::Missing)
                         }
                     }
-                    _ => { Ok(TTL::Persistent) }
+                    _ => Ok(TTL::Persistent)
                 }
             }
             _ => {
                 Ok(TTL::Missing)
             }
+        }
+    }
+
+    pub fn persist(&mut self, key: &[u8]) -> bool {
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                match (entry.expires_at) {
+                    Some(_ttl) => { 
+                        entry.expires_at = None;
+                        true
+                    }
+                    _ => false
+                }
+            },
+            _ => false
         }
     }
 }

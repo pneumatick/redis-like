@@ -6,6 +6,12 @@ pub struct Entry {
     expires_at: Option<SystemTime>,
 }
 
+impl Entry {
+    fn is_expired(&self, now: SystemTime) -> bool {
+        self.expires_at.is_some_and(|expiration| expiration <= now)
+    }
+}
+
 pub struct Database {
     entries: HashMap<Vec<u8>, Entry>
 }
@@ -78,6 +84,22 @@ impl Database {
         }
     }
 
+    pub fn remove_if_expired(
+        &mut self,
+        key: &[u8],
+    ) -> bool {
+        let now = SystemTime::now();
+        let expired = self.entries
+            .get(key)
+            .is_some_and(|entry| entry.is_expired(now));
+
+        if expired {
+            self.entries.remove(key);
+        }
+
+        expired
+    }
+
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
         match self.entries.get(key) {
             Some(entry) => {
@@ -92,7 +114,7 @@ impl Database {
                             Ok(TTL::ExpiresIn(seconds))
                         }
                         else {
-                            Ok(TTL::Missing)
+                            Ok(TTL::Expired)
                         }
                     }
                     _ => Ok(TTL::Persistent)
@@ -131,6 +153,7 @@ pub enum DbError {
 pub enum TTL {
     Missing,
     Persistent,
+    Expired,
     ExpiresIn(Duration),
 }
 

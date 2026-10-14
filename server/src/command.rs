@@ -148,6 +148,27 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
             _ => wrong_arity()
         }
     }
+    else if command.eq_ignore_ascii_case(b"PERSIST"){
+        match args {
+            [key] => {
+                match execute_persist(key, db) {
+                    Ok(result) => {
+                        if result {
+                            RespValue::Integer(1)
+                        }
+                        else {
+                            RespValue::Integer(0)
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+                        RespValue::Error("Err internal server error".into())
+                    }
+                }
+            }
+            _ => wrong_arity()
+        }
+    }
     else {
         RespValue::Error("ERR unknown command".into())
     }
@@ -203,4 +224,14 @@ fn execute_ttl(
         .map_err(|_| DbError::LockPoisoned)?;
 
     guard.ttl(key)
+}
+
+fn execute_persist(
+    key: &[u8],
+    db: &Arc<RwLock<Database>>
+) -> Result<bool, DbError> {
+    let mut guard = db.write()
+        .map_err(|_| DbError::LockPoisoned)?;
+    
+    Ok(guard.persist(key))
 }

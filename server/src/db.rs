@@ -107,7 +107,7 @@ impl Database {
     pub fn persist(&mut self, key: &[u8]) -> bool {
         match self.entries.get_mut(key) {
             Some(entry) => {
-                match (entry.expires_at) {
+                match entry.expires_at {
                     Some(_ttl) => { 
                         entry.expires_at = None;
                         true

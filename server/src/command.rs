@@ -138,7 +138,7 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
                         }
                     }
                     Ok(TTL::Persistent) => RespValue::Integer(-1),
-                    Ok(TTL::Missing) => RespValue::Integer(-2),
+                    Ok(TTL::Expired) | Ok(TTL::Missing) => RespValue::Integer(-2),
                     Err(error) => {
                         eprintln!("Database error: {error}");
                         RespValue::Error("Err internal server error".into())
@@ -174,6 +174,9 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     }
 }
 
+// NOTE: For following funcs, implement helper to reduce duplicate code like 
+// expiration checks? Good for any pre and post processing
+
 fn execute_set(
     key: &Vec<u8>, 
     value: &Vec<u8>, 
@@ -189,6 +192,28 @@ fn execute_get(
     key: &[u8],
     db: &Arc<RwLock<Database>>
 ) -> Result<Option<Vec<u8>>, DbError> {
+    // Check if the entry has expired
+    let check_guard = db.read()
+        .map_err(|_| DbError::LockPoisoned)?;
+    match check_guard.ttl(key) {
+        Ok(TTL::Expired) => {
+            drop(check_guard);
+            let mut expire_guard = db.write()
+                .map_err(|_| DbError::LockPoisoned)?;
+            // Ensure that another thread didn't add 
+            // the entry during lock acquisition
+            if !expire_guard.remove_if_expired(key) {
+                return execute_get(key, db)
+            }
+            else {
+                return Ok(None)
+            }
+        }
+        Err(error) => return Err(error),
+        _ => { drop(check_guard); }
+    }
+
+    // Execute the command
     let guard = db.read()
         .map_err(|_| DbError::LockPoisoned)?;
 
@@ -220,7 +245,7 @@ fn execute_ttl(
     key: &[u8],
     db: &Arc<RwLock<Database>>
 ) -> Result<TTL, DbError> {
-    let mut guard = db.write()
+    let guard = db.read()
         .map_err(|_| DbError::LockPoisoned)?;
 
     guard.ttl(key)

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, SystemTimeError};
 
 pub struct Entry {
     value: Vec<u8>,
@@ -43,7 +43,7 @@ impl Database {
     // NOTE: Returns Result<> because an actual error (overflow) can occur
     pub fn expire(&mut self, key: &[u8], expire_in: u64) -> DbResult<bool> {
         if expire_in == 0 {
-
+            // TODO: Figure out how Redis deals with this case
         }
 
         match self.entries.get_mut(key) {
@@ -65,12 +65,42 @@ impl Database {
                         
                     }
                     None => {
-                        entry.expires_at = Some(now + Duration::from_secs(expire_in));
+                        entry.expires_at = Some(
+                            now
+                            .checked_add(Duration::from_secs(expire_in))
+                            .ok_or(DbError::InvalidExpiration)?
+                        );
                         Ok(true)
                     }
                 }
             }
             None => Ok(false)
+        }
+    }
+
+    pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
+        match self.entries.get(key) {
+            Some(entry) => {
+                match entry.expires_at {
+                    Some(expiration) => {
+                        // Make sure the entry hasn't already expired
+                        let now = SystemTime::now();
+                        if expiration > now {
+                            let seconds = expiration.duration_since(now)
+                                .map_err(DbError::ClockError)?;
+
+                            Ok(TTL::ExpiresIn(seconds))
+                        }
+                        else {
+                            Ok(TTL::Missing)
+                        }
+                    }
+                    _ => { Ok(TTL::Persistent) }
+                }
+            }
+            _ => {
+                Ok(TTL::Missing)
+            }
         }
     }
 }
@@ -80,6 +110,13 @@ impl Database {
 pub enum DbError {
     LockPoisoned,
     InvalidExpiration,
+    ClockError(SystemTimeError),
+}
+
+pub enum TTL {
+    Missing,
+    Persistent,
+    ExpiresIn(Duration),
 }
 
 impl std::fmt::Display for DbError {
@@ -90,6 +127,9 @@ impl std::fmt::Display for DbError {
             }
             Self::InvalidExpiration => {
                 write!(f, "Expiration value invalid")
+            }
+            Self::ClockError(err) => {
+                write!(f, "System clock error: {}", err)
             }
         }
     }

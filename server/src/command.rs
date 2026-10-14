@@ -1,4 +1,4 @@
-use crate::db::{Database, DbError};
+use crate::db::{Database, DbError, TTL};
 
 use std::io::{self, BufReader};
 use std::net::TcpStream;
@@ -93,7 +93,6 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
                 Ok(result) => { result }
                 Err(error) => {
                     eprintln!("Database error: {error}");
-
                     return RespValue::Error("ERR internal server error".into())
                 }
             };
@@ -118,7 +117,30 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
                     Ok(result) => { RespValue::Integer(result.into()) }
                     Err(error) => {
                         eprintln!("Database error: {error}");
-
+                        RespValue::Error("Err internal server error".into())
+                    }
+                }
+            }
+            _ => wrong_arity()
+        }
+    }
+    else if command.eq_ignore_ascii_case(b"TTL") {
+        match args {
+            [key] => {
+                match execute_ttl(key, db) {
+                    Ok(TTL::ExpiresIn(ttl)) => {
+                        match i64::try_from(ttl.as_secs()) {
+                            Ok(ttl_i64) => RespValue::Integer(ttl_i64),
+                            Err(error) => {
+                                eprintln!("Conversion error: {error}");
+                                RespValue::Error("Err conversion error".into())
+                            }
+                        }
+                    }
+                    Ok(TTL::Persistent) => RespValue::Integer(-1),
+                    Ok(TTL::Missing) => RespValue::Integer(-2),
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
                         RespValue::Error("Err internal server error".into())
                     }
                 }
@@ -171,4 +193,14 @@ fn execute_expire(
         .map_err(|_| DbError::LockPoisoned)?;
 
     guard.expire(key, expire_in)
+}
+
+fn execute_ttl(
+    key: &[u8],
+    db: &Arc<RwLock<Database>>
+) -> Result<TTL, DbError> {
+    let mut guard = db.write()
+        .map_err(|_| DbError::LockPoisoned)?;
+
+    guard.ttl(key)
 }

@@ -174,9 +174,6 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     }
 }
 
-// NOTE: For following funcs, implement helper to reduce duplicate code like 
-// expiration checks? Good for any pre and post processing
-
 fn execute_set(
     key: &Vec<u8>, 
     value: &Vec<u8>, 
@@ -193,24 +190,10 @@ fn execute_get(
     db: &Arc<RwLock<Database>>
 ) -> Result<Option<Vec<u8>>, DbError> {
     // Check if the entry has expired
-    let check_guard = db.read()
-        .map_err(|_| DbError::LockPoisoned)?;
-    match check_guard.ttl(key) {
-        Ok(TTL::Expired) => {
-            drop(check_guard);
-            let mut expire_guard = db.write()
-                .map_err(|_| DbError::LockPoisoned)?;
-            // Ensure that another thread didn't add 
-            // the entry during lock acquisition
-            if !expire_guard.remove_if_expired(key) {
-                return execute_get(key, db)
-            }
-            else {
-                return Ok(None)
-            }
-        }
+    match remove_if_expired(key, db) {
+        Ok(TTL::Expired) => return Ok(None),
         Err(error) => return Err(error),
-        _ => { drop(check_guard); }
+        _ => ()
     }
 
     // Execute the command
@@ -245,10 +228,8 @@ fn execute_ttl(
     key: &[u8],
     db: &Arc<RwLock<Database>>
 ) -> Result<TTL, DbError> {
-    let guard = db.read()
-        .map_err(|_| DbError::LockPoisoned)?;
-
-    guard.ttl(key)
+    // Get the TTL from remove_if_expired; no direct call necessary
+    remove_if_expired(key, db)
 }
 
 fn execute_persist(
@@ -259,4 +240,26 @@ fn execute_persist(
         .map_err(|_| DbError::LockPoisoned)?;
     
     Ok(guard.persist(key))
+}
+
+/// Checks the entry's TTL to determine if it is expired and removes it if needed.
+/// Aquires a read lock at first, and only acquires a write lock if the 
+/// entry is expired.
+fn remove_if_expired(
+    key: &[u8],
+    db: &Arc<RwLock<Database>>
+) -> Result<TTL, DbError> {
+    let check_guard = db.read()
+        .map_err(|_| DbError::LockPoisoned)?;
+    match check_guard.ttl(key) {
+        Ok(TTL::Expired) => {
+            drop(check_guard);
+            let mut expire_guard = db.write()
+                .map_err(|_| DbError::LockPoisoned)?;
+            expire_guard.remove_if_expired(key);
+            Ok(TTL::Expired)
+        }
+        Ok(ttl) => Ok(ttl),
+        Err(error) => return Err(error),
+    }
 }

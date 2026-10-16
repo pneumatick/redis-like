@@ -67,7 +67,10 @@ impl Database {
                             );
                             Ok(true)
                         }
-                        else { Ok(false) }
+                        else { 
+                            self.remove_if_expired(key);
+                            Ok(false) 
+                        }
                         
                     }
                     None => {
@@ -127,6 +130,7 @@ impl Database {
     }
 
     pub fn persist(&mut self, key: &[u8]) -> bool {
+        // NOTE: Should this remove expired entries?
         match self.entries.get_mut(key) {
             Some(entry) => {
                 match entry.expires_at {

@@ -1,9 +1,15 @@
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, SystemTimeError};
 
 pub struct Entry {
     value: Vec<u8>,
     expires_at: Option<SystemTime>,
+}
+
+impl Entry {
+    fn is_expired(&self, now: SystemTime) -> bool {
+        self.expires_at.is_some_and(|expiration| expiration <= now)
+    }
 }
 
 pub struct Database {
@@ -41,11 +47,7 @@ impl Database {
     }
 
     // NOTE: Returns Result<> because an actual error (overflow) can occur
-    pub fn expire(&mut self, key: &[u8], expire_in: u64) -> DbResult<bool> {
-        if expire_in == 0 {
-
-        }
-
+    pub fn expire(&mut self, key: &[u8], expire_in: Duration) -> DbResult<bool> {
         match self.entries.get_mut(key) {
             Some(entry) => {
                 let now = SystemTime::now();
@@ -56,21 +58,86 @@ impl Database {
                         if expiration > now {
                             entry.expires_at = Some(
                                 now
-                                .checked_add(Duration::from_secs(expire_in))
+                                .checked_add(expire_in)
                                 .ok_or(DbError::InvalidExpiration)?
                             );
                             Ok(true)
                         }
-                        else { Ok(false) }
+                        else { 
+                            self.remove_if_expired(key);
+                            Ok(false) 
+                        }
                         
                     }
                     None => {
-                        entry.expires_at = Some(now + Duration::from_secs(expire_in));
+                        entry.expires_at = Some(
+                            now
+                            .checked_add(expire_in)
+                            .ok_or(DbError::InvalidExpiration)?
+                        );
                         Ok(true)
                     }
                 }
             }
             None => Ok(false)
+        }
+    }
+
+    pub fn remove_if_expired(
+        &mut self,
+        key: &[u8],
+    ) -> bool {
+        let now = SystemTime::now();
+        let expired = self.entries
+            .get(key)
+            .is_some_and(|entry| entry.is_expired(now));
+
+        if expired {
+            self.entries.remove(key);
+        }
+
+        expired
+    }
+
+    pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
+        match self.entries.get(key) {
+            Some(entry) => {
+                match entry.expires_at {
+                    Some(expiration) => {
+                        // Make sure the entry hasn't already expired
+                        let now = SystemTime::now();
+                        if expiration > now {
+                            let seconds = expiration.duration_since(now)
+                                .map_err(DbError::ClockError)?;
+
+                            Ok(TTL::ExpiresIn(seconds))
+                        }
+                        else {
+                            Ok(TTL::Expired)
+                        }
+                    }
+                    _ => Ok(TTL::Persistent)
+                }
+            }
+            _ => {
+                Ok(TTL::Missing)
+            }
+        }
+    }
+
+    pub fn persist(&mut self, key: &[u8]) -> bool {
+        // NOTE: Should this remove expired entries?
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                match entry.expires_at {
+                    Some(_ttl) => { 
+                        entry.expires_at = None;
+                        true
+                    }
+                    _ => false
+                }
+            },
+            _ => false
         }
     }
 }
@@ -80,6 +147,14 @@ impl Database {
 pub enum DbError {
     LockPoisoned,
     InvalidExpiration,
+    ClockError(SystemTimeError),
+}
+
+pub enum TTL {
+    Missing,
+    Persistent,
+    Expired,
+    ExpiresIn(Duration),
 }
 
 impl std::fmt::Display for DbError {
@@ -90,6 +165,9 @@ impl std::fmt::Display for DbError {
             }
             Self::InvalidExpiration => {
                 write!(f, "Expiration value invalid")
+            }
+            Self::ClockError(err) => {
+                write!(f, "System clock error: {}", err)
             }
         }
     }

@@ -1,8 +1,10 @@
 use crate::db::{Database, DbError, TTL};
 
+//use std::fmt::Error;
 use std::io::{self, BufReader};
 use std::net::TcpStream;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use common::resp::{
     read_request,
@@ -104,14 +106,41 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
 
         RespValue::Integer(deleted)
     } 
-    else if command.eq_ignore_ascii_case(b"EXPIRE") {
+    else if command.eq_ignore_ascii_case(b"EXPIRE") || 
+            command.eq_ignore_ascii_case(b"PEXPIRE") 
+    {
         match args {
             [key, expire_in_str] => {
                 // NOTE: Replace expect with proper error handling
-                let expire_in = std::str::from_utf8(expire_in_str)
+                let time = std::str::from_utf8(expire_in_str)
                     .expect("Invalid UTF-8 sequence")
-                    .parse::<u64>()
+                    .parse::<i64>()
                     .expect("Not a valid integer");
+                
+                // Treat 0 and negative durations as DELs
+                if time <= 0 {
+                    return match execute_del(key, db) {
+                        Ok(result) => RespValue::Integer(result.into()),
+                        Err(error) => {
+                            eprintln!("Database error: {error}");
+                            RespValue::Error("ERR internal server error".into())
+                        }
+                    }
+                }
+                
+                // <= 0 shouldn't make it here; 0 as default just in case for now
+                let expire_in = if command.eq_ignore_ascii_case(b"EXPIRE") {
+                    Duration::from_secs(
+                        u64::try_from(time)
+                        .unwrap_or(0)
+                    )
+                } 
+                else {
+                    Duration::from_millis(
+                        u64::try_from(time)
+                        .unwrap_or(0)
+                    )
+                };
 
                 match execute_expire(key, expire_in, db) {
                     Ok(result) => { RespValue::Integer(result.into()) }
@@ -215,7 +244,7 @@ fn execute_del(
 
 fn execute_expire(
     key: &[u8],
-    expire_in: u64,
+    expire_in: Duration,
     db: &Arc<RwLock<Database>>
 ) -> Result<bool, DbError> {
     let mut guard = db.write()

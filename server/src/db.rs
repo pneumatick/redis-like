@@ -47,11 +47,7 @@ impl Database {
     }
 
     // NOTE: Returns Result<> because an actual error (overflow) can occur
-    pub fn expire(&mut self, key: &[u8], expire_in: u64) -> DbResult<bool> {
-        if expire_in == 0 {
-            // TODO: Figure out how Redis deals with this case
-        }
-
+    pub fn expire(&mut self, key: &[u8], expire_in: Duration) -> DbResult<bool> {
         match self.entries.get_mut(key) {
             Some(entry) => {
                 let now = SystemTime::now();
@@ -62,7 +58,7 @@ impl Database {
                         if expiration > now {
                             entry.expires_at = Some(
                                 now
-                                .checked_add(Duration::from_secs(expire_in))
+                                .checked_add(expire_in)
                                 .ok_or(DbError::InvalidExpiration)?
                             );
                             Ok(true)
@@ -76,7 +72,7 @@ impl Database {
                     None => {
                         entry.expires_at = Some(
                             now
-                            .checked_add(Duration::from_secs(expire_in))
+                            .checked_add(expire_in)
                             .ok_or(DbError::InvalidExpiration)?
                         );
                         Ok(true)

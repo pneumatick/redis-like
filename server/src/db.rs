@@ -43,6 +43,12 @@ impl Database {
     }
 
     pub fn del(&mut self, key: &[u8]) -> bool {
+        // Check for expiration first, remove if necessary and treat 
+        // the key as though it didn't exist
+        if self.remove_if_expired(key) {
+            return false
+        }
+
         self.entries.remove(key).is_some()
     }
 

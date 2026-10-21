@@ -23,13 +23,41 @@ impl Database {
         }
     }
 
-    pub fn set(&mut self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn set(
+        &mut self, 
+        key: Vec<u8>, 
+        value: Vec<u8>,
+        options: SetOptions
+    ) -> DbResult<bool> {
+        // Remove the key if it's expired
+        self.remove_if_expired(&key);
+
+        // Check that the key exists
+        let exists = self.entries.contains_key(key.as_slice());
+
+        match options.condition {
+            SetCondition::IfAbsent if exists => { return Ok(false); }
+            SetCondition::IfPresent if !exists => { return Ok(false); }
+            _ => {}
+        }
+
+        let now = SystemTime::now();
+
+        let expires_at = options.expires_in
+            .map(|duration| {
+                now.checked_add(duration)
+                    .ok_or(DbError::InvalidExpiration)
+            })
+            .transpose()?;
+
         self.entries.insert(
             key, 
             Entry {
-            value,
-            expires_at: None,
+                value,
+                expires_at,
         });
+
+        Ok(true)
     }
 
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
@@ -43,6 +71,12 @@ impl Database {
     }
 
     pub fn del(&mut self, key: &[u8]) -> bool {
+        // Check for expiration first, remove if necessary and treat 
+        // the key as though it didn't exist
+        if self.remove_if_expired(key) {
+            return false
+        }
+
         self.entries.remove(key).is_some()
     }
 
@@ -126,7 +160,12 @@ impl Database {
     }
 
     pub fn persist(&mut self, key: &[u8]) -> bool {
-        // NOTE: Should this remove expired entries?
+        // Check for expiration first, remove if necessary and treat 
+        // the key as though it didn't exist
+        if self.remove_if_expired(key) {
+            return false
+        }
+
         match self.entries.get_mut(key) {
             Some(entry) => {
                 match entry.expires_at {
@@ -155,6 +194,20 @@ pub enum TTL {
     Persistent,
     Expired,
     ExpiresIn(Duration),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub enum SetCondition {
+    #[default]
+    Always,
+    IfAbsent,  // NX
+    IfPresent, // XX
+}
+
+#[derive(Debug, Default)]
+pub struct SetOptions {
+    pub condition: SetCondition,
+    pub expires_in: Option<Duration>,
 }
 
 impl std::fmt::Display for DbError {

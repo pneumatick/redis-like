@@ -368,3 +368,401 @@ fn remove_if_expired(
         Err(error) => return Err(error),
     }
 }
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Barrier, RwLock};
+    use std::thread;
+    use std::time::Duration;
+
+    fn new_db() -> Arc<RwLock<Database>> {
+        Arc::new(RwLock::new(Database::new()))
+    }
+
+    // Execute commands using the same argument structure
+    // produced by the RESP2 request parser.
+    fn call(
+        db: &Arc<RwLock<Database>>,
+        args: &[&str],
+    ) -> RespValue {
+        let request: Vec<Vec<u8>> = args
+            .iter()
+            .map(|arg| arg.as_bytes().to_vec())
+            .collect();
+
+        execute(&request, db)
+    }
+
+    fn assert_ok(response: RespValue) {
+        assert_eq!(
+            response,
+            RespValue::SimpleString("OK".into())
+        );
+    }
+
+    fn assert_null(response: RespValue) {
+        assert_eq!(
+            response,
+            RespValue::BulkString(None)
+        );
+    }
+
+    fn assert_value(
+        db: &Arc<RwLock<Database>>,
+        key: &str,
+        expected: &str,
+    ) {
+        assert_eq!(
+            call(db, &["GET", key]),
+            RespValue::BulkString(
+                Some(expected.as_bytes().to_vec())
+            )
+        );
+    }
+
+    fn assert_error_contains(
+        response: RespValue,
+        expected: &str,
+    ) {
+        match response {
+            RespValue::Error(message) => {
+                assert!(
+                    message.to_ascii_lowercase()
+                        .contains(&expected.to_ascii_lowercase()),
+                    "Expected error containing '{expected}', got '{message}'"
+                );
+            }
+            other => panic!("Expected error, got {other:?}"),
+        }
+    }
+
+    fn ttl(db: &Arc<RwLock<Database>>, key: &str) -> i64 {
+        match call(db, &["TTL", key]) {
+            RespValue::Integer(value) => value,
+            other => panic!("Expected integer TTL, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_without_options() {
+        let db = new_db();
+
+        assert_ok(call(&db, &["SET", "foo", "bar"]));
+        assert_value(&db, "foo", "bar");
+        assert_eq!(ttl(&db, "foo"), -1);
+    }
+
+    #[test]
+    fn set_nx_succeeds_if_missing() {
+        let db = new_db();
+
+        assert_ok(call(&db, &["SET", "foo", "first", "NX"]));
+        assert_value(&db, "foo", "first");
+    }
+
+    #[test]
+    fn set_nx_fails_if_present() {
+        let db = new_db();
+
+        assert_ok(call(&db, &["SET", "foo", "first"]));
+
+        assert_null(call(
+            &db,
+            &["SET", "foo", "second", "NX"]
+        ));
+
+        assert_value(&db, "foo", "first");
+    }
+
+    #[test]
+    fn set_xx_succeeds_if_present() {
+        let db = new_db();
+
+        assert_ok(call(&db, &["SET", "foo", "first"]));
+        assert_ok(call(&db, &["SET", "foo", "second", "XX"]));
+
+        assert_value(&db, "foo", "second");
+    }
+
+    #[test]
+    fn set_xx_fails_if_missing() {
+        let db = new_db();
+
+        assert_null(call(
+            &db,
+            &["SET", "foo", "value", "XX"]
+        ));
+
+        assert_null(call(&db, &["GET", "foo"]));
+    }
+
+    #[test]
+    fn set_ex_assigns_ttl() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["SET", "foo", "bar", "EX", "60"]
+        ));
+
+        assert_value(&db, "foo", "bar");
+
+        let remaining = ttl(&db, "foo");
+        assert!(
+            (0..=60).contains(&remaining),
+            "Expected TTL between 0 and 60, got {remaining}"
+        );
+    }
+
+    #[test]
+    fn set_px_expires_key() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["SET", "foo", "bar", "PX", "100"]
+        ));
+
+        thread::sleep(Duration::from_millis(150));
+
+        assert_null(call(&db, &["GET", "foo"]));
+        assert_eq!(ttl(&db, "foo"), -2);
+    }
+
+    #[test]
+    fn set_accepts_options_in_either_order() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["SET", "first", "a", "NX", "EX", "60"]
+        ));
+        assert_ok(call(
+            &db,
+            &["SET", "second", "b", "EX", "60", "NX"]
+        ));
+
+        assert_value(&db, "first", "a");
+        assert_value(&db, "second", "b");
+
+        assert!((0..=60).contains(&ttl(&db, "first")));
+        assert!((0..=60).contains(&ttl(&db, "second")));
+
+        // Verify XX can also be combined with expiration.
+        assert_ok(call(
+            &db,
+            &["SET", "first", "updated", "XX", "PX", "5000"]
+        ));
+
+        assert_value(&db, "first", "updated");
+
+        assert!((0..=5).contains(&ttl(&db, "first")));
+    }
+
+    #[test]
+    fn failed_nx_preserves_value_and_ttl() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["SET", "foo", "original", "EX", "10"]
+        ));
+
+        assert_null(call(
+            &db,
+            &["SET", "foo", "replacement", "NX", "EX", "60"]
+        ));
+
+        assert_value(&db, "foo", "original");
+
+        // A failed NX must not extend the original TTL to 60.
+        let remaining = ttl(&db, "foo");
+        assert!(
+            (0..=10).contains(&remaining),
+            "Failed NX changed TTL to {remaining}"
+        );
+    }
+
+    #[test]
+    fn ordinary_set_clears_existing_ttl() {
+        let db = new_db();
+
+        assert_ok(call(&db, &["SET", "foo", "first"]));
+
+        assert_eq!(
+            call(&db, &["EXPIRE", "foo", "60"]),
+            RespValue::Integer(1)
+        );
+
+        assert_ok(call(&db, &["SET", "foo", "second"]));
+
+        assert_value(&db, "foo", "second");
+        assert_eq!(ttl(&db, "foo"), -1);
+    }
+
+    #[test]
+    fn set_nx_succeeds_on_expired_key() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["SET", "foo", "old", "PX", "30"]
+        ));
+
+        thread::sleep(Duration::from_millis(80));
+
+        assert_ok(call(
+            &db,
+            &["SET", "foo", "new", "NX"]
+        ));
+
+        assert_value(&db, "foo", "new");
+        assert_eq!(ttl(&db, "foo"), -1);
+    }
+
+    #[test]
+    fn set_xx_fails_on_expired_key() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["SET", "foo", "old", "PX", "30"]
+        ));
+
+        thread::sleep(Duration::from_millis(80));
+
+        assert_null(call(
+            &db,
+            &["SET", "foo", "new", "XX"]
+        ));
+
+        assert_null(call(&db, &["GET", "foo"]));
+    }
+
+    #[test]
+    fn set_rejects_conflicting_and_duplicate_options() {
+        let db = new_db();
+
+        let invalid_cases: &[&[&str]] = &[
+            &["SET", "foo", "bar", "NX", "XX"],
+            &["SET", "foo", "bar", "EX", "10", "PX", "100"],
+            &["SET", "foo", "bar", "NX", "NX"],
+            &["SET", "foo", "bar", "XX", "XX"],
+            &["SET", "foo", "bar", "EX", "10", "EX", "20"],
+            &["SET", "foo", "bar", "PX", "10", "PX", "20"],
+            &["SET", "foo", "bar", "UNKNOWN"],
+        ];
+
+        for args in invalid_cases {
+            assert_error_contains(call(&db, args), "syntax");
+        }
+
+        // None of the invalid commands may change the DB.
+        assert_null(call(&db, &["GET", "foo"]));
+    }
+
+    #[test]
+    fn set_rejects_invalid_expiration_values() {
+        let db = new_db();
+
+        for args in [
+            ["SET", "foo", "bar", "EX", "0"],
+            ["SET", "foo", "bar", "EX", "-1"],
+            ["SET", "foo", "bar", "PX", "0"],
+        ] {
+            assert_error_contains(
+                call(&db, &args),
+                "invalid expire time"
+            );
+        }
+
+        for args in [
+            ["SET", "foo", "bar", "EX", "abc"],
+            ["SET", "foo", "bar", "PX", "1.5"],
+            ["SET", "foo", "bar", "EX", "9223372036854775808"],
+        ] {
+            assert_error_contains(
+                call(&db, &args),
+                "integer"
+            );
+        }
+
+        assert_error_contains(
+            call(&db, &["SET", "foo", "bar", "EX"]),
+            "syntax"
+        );
+
+        assert_null(call(&db, &["GET", "foo"]));
+    }
+
+    #[test]
+    fn set_options_are_case_insensitive() {
+        let db = new_db();
+
+        assert_ok(call(
+            &db,
+            &["set", "foo", "bar", "nx", "ex", "60"]
+        ));
+
+        assert_value(&db, "foo", "bar");
+        assert!((0..=60).contains(&ttl(&db, "foo")));
+    }
+
+    #[test]
+    fn concurrent_set_nx_has_exactly_one_winner() {
+        let db = new_db();
+
+        const THREADS: usize = 16;
+        let barrier = Arc::new(Barrier::new(THREADS + 1));
+
+        let mut handles = Vec::new();
+
+        for i in 0..THREADS {
+            let db = Arc::clone(&db);
+            let barrier = Arc::clone(&barrier);
+
+            handles.push(thread::spawn(move || {
+                let value = format!("value-{i}");
+
+                // Synchronize the start of all commands.
+                barrier.wait();
+
+                call(
+                    &db,
+                    &["SET", "shared", &value, "NX"]
+                )
+            }));
+        }
+
+        barrier.wait();
+
+        let mut successful = 0;
+        let mut rejected = 0;
+
+        for handle in handles {
+            match handle.join().unwrap() {
+                RespValue::SimpleString(s) if s == "OK" => {
+                    successful += 1;
+                }
+                RespValue::BulkString(None) => {
+                    rejected += 1;
+                }
+                other => panic!("Unexpected response: {other:?}"),
+            }
+        }
+
+        assert_eq!(successful, 1);
+        assert_eq!(rejected, THREADS - 1);
+
+        // A successful SET must have stored one value.
+        match call(&db, &["GET", "shared"]) {
+            RespValue::BulkString(Some(value)) => {
+                assert!(value.starts_with(b"value-"));
+            }
+            other => panic!("Expected stored value, got {other:?}"),
+        }
+    }
+}

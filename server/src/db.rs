@@ -23,13 +23,41 @@ impl Database {
         }
     }
 
-    pub fn set(&mut self, key: Vec<u8>, value: Vec<u8>) {
+    pub fn set(
+        &mut self, 
+        key: Vec<u8>, 
+        value: Vec<u8>,
+        options: SetOptions
+    ) -> DbResult<bool> {
+        // Remove the key if it's expired
+        self.remove_if_expired(&key);
+
+        // Check that the key exists
+        let exists = self.entries.contains_key(key.as_slice());
+
+        match options.condition {
+            SetCondition::IfAbsent if exists => { return Ok(false); }
+            SetCondition::IfPresent if !exists => { return Ok(false); }
+            _ => {}
+        }
+
+        let now = SystemTime::now();
+
+        let expires_at = options.expires_in
+            .map(|duration| {
+                now.checked_add(duration)
+                    .ok_or(DbError::InvalidExpiration)
+            })
+            .transpose()?;
+
         self.entries.insert(
             key, 
             Entry {
-            value,
-            expires_at: None,
+                value,
+                expires_at,
         });
+
+        Ok(true)
     }
 
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
@@ -166,6 +194,20 @@ pub enum TTL {
     Persistent,
     Expired,
     ExpiresIn(Duration),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub enum SetCondition {
+    #[default]
+    Always,
+    IfAbsent,  // NX
+    IfPresent, // XX
+}
+
+#[derive(Debug, Default)]
+pub struct SetOptions {
+    pub condition: SetCondition,
+    pub expires_in: Option<Duration>,
 }
 
 impl std::fmt::Display for DbError {

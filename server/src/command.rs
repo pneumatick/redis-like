@@ -1,4 +1,4 @@
-use crate::db::{Database, DbError, TTL};
+use crate::db::{Database, DbError, SetCondition, SetOptions, TTL};
 
 //use std::fmt::Error;
 use std::io::{self, BufReader};
@@ -54,9 +54,17 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     }
     else if command.eq_ignore_ascii_case(b"SET") {
         match args {
-            [key, value] => {
-                match execute_set(key, value, db) {
-                    Ok(()) => { RespValue::SimpleString("OK".into()) }
+            [key, value, option_args @ ..] => {
+                let options = match parse_set_options(option_args) {
+                    Ok(options) => options,
+                    Err(error) => {
+                        return RespValue::Error(error.into());
+                    }
+                };
+
+                match execute_set(key, value, options, db) {
+                    Ok(true) => { RespValue::SimpleString("OK".into()) },
+                    Ok(false) => { RespValue::BulkString(None) },
                     Err(error) => {
                         eprintln!("Database error: {error}");
                         RespValue::Error("Err internal server error".into())
@@ -203,15 +211,83 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     }
 }
 
+fn parse_set_options(
+    args: &[Vec<u8>],
+) -> Result<SetOptions, &'static str> {
+    let mut options = SetOptions::default();
+    let mut i = 0;
+
+    while i < args.len() {
+        let option = args[i].as_slice();
+
+        if option.eq_ignore_ascii_case(b"NX") {
+            if options.condition != SetCondition::Always {
+                return Err("ERR syntax error");
+            }
+            
+            options.condition = SetCondition::IfAbsent;
+            i += 1;
+        }
+        else if option.eq_ignore_ascii_case(b"XX") {
+            if options.condition != SetCondition::Always {
+                return Err("ERR syntax error");
+            }
+
+            options.condition = SetCondition::IfPresent;
+            i += 1;
+        }
+        else if option.eq_ignore_ascii_case(b"EX") 
+             || option.eq_ignore_ascii_case(b"PX")
+        {
+            if options.expires_in.is_some() {
+                return Err("ERR syntax error");
+            }
+
+            // Create the duration based on the specified option and time amount
+            let amount = args.get(i + 1)
+                .ok_or("ERR syntax error")?;
+
+            let amount = std::str::from_utf8(amount)
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .ok_or("ERR value is not an integer or out of range")?;
+
+            if amount <= 0 {
+                return Err("ERR invalid expire time in 'set' command");
+            }
+
+            let amount = u64::try_from(amount)
+                .map_err(|_| "ERR invalid expire time")?;
+
+            options.expires_in = Some(
+                if option.eq_ignore_ascii_case(b"EX") {
+                    Duration::from_secs(amount)
+                }
+                else {
+                    Duration::from_millis(amount)
+                }
+            );
+
+            i += 2;
+        }
+        else {
+            return Err("ERR syntax error");
+        }
+    }
+
+    Ok(options)
+}
+
 fn execute_set(
-    key: &Vec<u8>, 
-    value: &Vec<u8>, 
+    key: &[u8], 
+    value: &[u8], 
+    options: SetOptions,
     db: &Arc<RwLock<Database>>
-) -> Result<(), DbError> {
+) -> Result<bool, DbError> {
     let mut guard = db.write()
         .map_err(|_| DbError::LockPoisoned)?;
 
-    Ok(guard.set(key.clone(), value.clone()))
+    guard.set(key.to_vec(), value.to_vec(), options)
 }
 
 fn execute_get(

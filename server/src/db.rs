@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, SystemTimeError};
 
 pub struct Entry {
-    value: Vec<u8>,
+    value: Value,
     expires_at: Option<SystemTime>,
 }
 
@@ -53,7 +53,7 @@ impl Database {
         self.entries.insert(
             key, 
             Entry {
-                value,
+                value: Value::Bytes(value),
                 expires_at,
         });
 
@@ -67,7 +67,7 @@ impl Database {
                 entry.expires_at
                     .is_none_or(|expires_at| expires_at > SystemTime::now())
             })
-            .map(|entry| entry.value.as_slice())
+            .map(|entry| entry.value.as_slice())?
     }
 
     pub fn del(&mut self, key: &[u8]) -> bool {
@@ -181,6 +181,21 @@ impl Database {
     }
 }
 
+
+#[derive(Debug, PartialEq, Eq)]
+enum Value {
+    Bytes(Vec<u8>),
+    Integer(i64),
+}
+
+impl Value {
+    fn as_slice(&self) -> Option<&[u8]> {
+        match self {
+            Value::Bytes(v) => Some(v.as_slice()),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum DbError {

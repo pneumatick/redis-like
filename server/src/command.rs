@@ -185,7 +185,7 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
             _ => wrong_arity()
         }
     }
-    else if command.eq_ignore_ascii_case(b"PERSIST"){
+    else if command.eq_ignore_ascii_case(b"PERSIST") {
         match args {
             [key] => {
                 match execute_persist(key, db) {

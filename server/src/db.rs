@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, SystemTimeError};
 
 pub struct Entry {
@@ -53,7 +53,7 @@ impl Database {
         self.entries.insert(
             key, 
             Entry {
-                value: Value::Bytes(value),
+                value: Value::String(StringValue::Bytes(value)),
                 expires_at,
         });
 
@@ -184,14 +184,31 @@ impl Database {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Value {
-    Bytes(Vec<u8>),
-    Integer(i64),
+    String(StringValue),
+    List(Vec<Vec<u8>>),
+    Set(HashSet<Vec<u8>>),
+    Hash(HashMap<Vec<u8>, Vec<u8>>),
 }
 
 impl Value {
     fn as_slice(&self) -> Option<&[u8]> {
         match self {
-            Value::Bytes(v) => Some(v.as_slice()),
+            Value::String(v) => Some(v.as_slice()?),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StringValue {
+    Bytes(Vec<u8>),
+    Integer(i64),
+}
+
+impl StringValue {
+    fn as_slice(&self) -> Option<&[u8]> {
+        match self {
+            StringValue::Bytes(v) => Some(v.as_slice()),
             _ => None,
         }
     }

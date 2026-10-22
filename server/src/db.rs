@@ -60,14 +60,16 @@ impl Database {
         Ok(true)
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
-        self.entries
+    pub fn get(&self, key: &[u8]) -> Option<&Value> {
+        Some(
+            self.entries
             .get(key)
             .filter(|entry| {
                 entry.expires_at
                     .is_none_or(|expires_at| expires_at > SystemTime::now())
             })
-            .map(|entry| entry.value.as_slice())?
+            .map(|entry| &entry.value)?
+        )
     }
 
     pub fn del(&mut self, key: &[u8]) -> bool {
@@ -183,35 +185,19 @@ impl Database {
 
 
 #[derive(Debug, PartialEq, Eq)]
-enum Value {
+pub enum Value {
     String(StringValue),
+    /* 
     List(Vec<Vec<u8>>),
     Set(HashSet<Vec<u8>>),
     Hash(HashMap<Vec<u8>, Vec<u8>>),
-}
-
-impl Value {
-    fn as_slice(&self) -> Option<&[u8]> {
-        match self {
-            Value::String(v) => Some(v.as_slice()?),
-            _ => None,
-        }
-    }
+    */
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum StringValue {
+pub enum StringValue {
     Bytes(Vec<u8>),
     Integer(i64),
-}
-
-impl StringValue {
-    fn as_slice(&self) -> Option<&[u8]> {
-        match self {
-            StringValue::Bytes(v) => Some(v.as_slice()),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug)]

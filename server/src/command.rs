@@ -1,4 +1,4 @@
-use crate::db::{Database, DbError, SetCondition, SetOptions, TTL};
+use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
 
 //use std::fmt::Error;
 use std::io::{self, BufReader};
@@ -305,7 +305,18 @@ fn execute_get(
     let guard = db.read()
         .map_err(|_| DbError::LockPoisoned)?;
 
-    Ok(guard.get(key).map(|value| value.to_vec()))
+    Ok(
+        match guard.get(key) {
+            Some(Value::String(StringValue::Bytes(bytes))) => {
+                Some(bytes.clone())
+            }
+            Some(Value::String(StringValue::Integer(n))) => {
+                println!("INTEGER!!!");                                         // Remove later
+                Some(n.to_string().into_bytes())
+            }
+            None => None,
+        }
+    )
 }
 
 fn execute_del(

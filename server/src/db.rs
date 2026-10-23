@@ -361,7 +361,7 @@ impl std::fmt::Display for DbError {
                 write!(f, "Wrong Redis type")
             }
             Self::NotInteger => {
-                write!(f, "Not an integer")
+                write!(f, "Not an integer or out of range")
             }
             Self::Overflow => {
                 write!(f, "Integer overflow")

@@ -206,6 +206,8 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
             _ => wrong_arity()
         }
     }
+    // Could remove INCR and DECR, replace with INCRBY where the former is 
+    // add_integer(1), the latter add_integer(-1), INCRBY add_integer(n), DECRBY add_integer(-n)
     else if command.eq_ignore_ascii_case(b"INCR") {
         match args {
             [key] => {

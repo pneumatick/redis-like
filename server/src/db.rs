@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, SystemTimeError};
 
 pub struct Entry {
-    value: Vec<u8>,
+    value: Value,
     expires_at: Option<SystemTime>,
 }
 
@@ -53,21 +53,23 @@ impl Database {
         self.entries.insert(
             key, 
             Entry {
-                value,
+                value: Value::String(StringValue::Bytes(value)),
                 expires_at,
         });
 
         Ok(true)
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
-        self.entries
+    pub fn get(&self, key: &[u8]) -> Option<&Value> {
+        Some(
+            self.entries
             .get(key)
             .filter(|entry| {
                 entry.expires_at
                     .is_none_or(|expires_at| expires_at > SystemTime::now())
             })
-            .map(|entry| entry.value.as_slice())
+            .map(|entry| &entry.value)?
+        )
     }
 
     pub fn del(&mut self, key: &[u8]) -> bool {
@@ -179,14 +181,147 @@ impl Database {
             _ => false
         }
     }
+
+    pub fn incr(&mut self, key: &[u8]) -> DbResult<i64> {
+        // Remove expired entry if necessary
+        self.remove_if_expired(key);
+
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                match entry.value.add_integer(1) {
+                    Ok(i) => Ok(i),
+                    Err(err) => Err(err),
+                }
+            }
+            None => {
+                let attempt = self.set(key.to_vec(), vec!['0' as u8], SetOptions::default());
+                match attempt {
+                    Ok(_) => {
+                        // Attempt is only false with options. Always true here
+                        Ok(1)
+                    }
+                    Err(err) => Err(err)
+                }
+            }
+        }
+    }
+
+    pub fn decr(&mut self, key: &[u8]) -> DbResult<i64> {
+        // Remove expired entry if necessary
+        self.remove_if_expired(key);
+
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                match entry.value.sub_integer(1) {
+                    Ok(i) => Ok(i),
+                    Err(err) => Err(err),
+                }
+            }
+            None => {
+                let attempt = self.set(key.to_vec(), vec!['0' as u8], SetOptions::default());
+                match attempt {
+                    Ok(_) => {
+                        // Attempt is only false with options. Always true here
+                        Ok(0)
+                    }
+                    Err(err) => Err(err)
+                }
+            }
+        }
+    }
 }
 
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Value {
+    String(StringValue),
+    /*
+    List(Vec<Vec<u8>>),
+    Set(HashSet<Vec<u8>>),
+    Hash(HashMap<Vec<u8>, Vec<u8>>),
+    */
+}
+
+impl Value {
+    pub fn add_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+        let Value::String(string) = self else {
+            return Err(DbError::WrongType);
+        };
+
+        let current = match string {
+            StringValue::Integer(i) => *i,
+            StringValue::Bytes(bytes) => {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .ok_or(DbError::NotInteger)?
+            }
+        };
+
+        let result = current
+            .checked_add(delta)
+            .ok_or(DbError::Overflow)?;
+
+        *string = StringValue::Integer(result);
+
+        Ok(result)
+    }
+
+    pub fn sub_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+        let Value::String(string) = self else {
+            return Err(DbError::WrongType);
+        };
+
+        let current = match string {
+            StringValue::Integer(i) => *i,
+            StringValue::Bytes(bytes) => {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .ok_or(DbError::NotInteger)?
+            }
+        };
+
+        let result = current
+            .checked_sub(delta)
+            .ok_or(DbError::Underflow)?;
+
+        *string = StringValue::Integer(result);
+
+        Ok(result)
+    }
+
+    pub fn copy(&self) -> Value {
+        match self {
+            Value::String(s_value) => Value::String(s_value.copy_value())
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum StringValue {
+    Bytes(Vec<u8>),
+    Integer(i64),
+}
+
+impl StringValue {
+    pub fn copy_value(&self) -> StringValue {
+        match self {
+            StringValue::Bytes(v) => StringValue::Bytes(v.clone()),
+            StringValue::Integer(i) => StringValue::Integer(*i)
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum DbError {
     LockPoisoned,
     InvalidExpiration,
     ClockError(SystemTimeError),
+    WrongType,
+    NotInteger,
+    Overflow,
+    Underflow,
 }
 
 pub enum TTL {
@@ -221,6 +356,18 @@ impl std::fmt::Display for DbError {
             }
             Self::ClockError(err) => {
                 write!(f, "System clock error: {}", err)
+            }
+            Self::WrongType => {
+                write!(f, "Wrong Redis type")
+            }
+            Self::NotInteger => {
+                write!(f, "Not an integer or out of range")
+            }
+            Self::Overflow => {
+                write!(f, "Integer overflow")
+            }
+            Self::Underflow => {
+                write!(f, "Integer underflow")
             }
         }
     }

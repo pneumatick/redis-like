@@ -1,4 +1,4 @@
-use crate::db::{Database, DbError, SetCondition, SetOptions, TTL};
+use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
 
 //use std::fmt::Error;
 use std::io::{self, BufReader};
@@ -185,7 +185,7 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
             _ => wrong_arity()
         }
     }
-    else if command.eq_ignore_ascii_case(b"PERSIST"){
+    else if command.eq_ignore_ascii_case(b"PERSIST") {
         match args {
             [key] => {
                 match execute_persist(key, db) {
@@ -196,6 +196,38 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
                         else {
                             RespValue::Integer(0)
                         }
+                    }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+                        RespValue::Error("Err internal server error".into())
+                    }
+                }
+            }
+            _ => wrong_arity()
+        }
+    }
+    else if command.eq_ignore_ascii_case(b"INCR") {
+        match args {
+            [key] => {
+                match execute_incr(key, db) {
+                    Ok(i) => {
+                        RespValue::Integer(i)
+                    }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+                        RespValue::Error("Err internal server error".into())
+                    }
+                }
+            }
+            _ => wrong_arity()
+        }
+    }
+    else if command.eq_ignore_ascii_case(b"DECR") {
+        match args {
+            [key] => {
+                match execute_decr(key, db) {
+                    Ok(i) => {
+                        RespValue::Integer(i)
                     }
                     Err(error) => {
                         eprintln!("Database error: {error}");
@@ -305,7 +337,17 @@ fn execute_get(
     let guard = db.read()
         .map_err(|_| DbError::LockPoisoned)?;
 
-    Ok(guard.get(key).map(|value| value.to_vec()))
+    Ok(
+        match guard.get(key) {
+            Some(Value::String(StringValue::Bytes(bytes))) => {
+                Some(bytes.clone())
+            }
+            Some(Value::String(StringValue::Integer(n))) => {
+                Some(n.to_string().into_bytes())
+            }
+            None => None,
+        }
+    )
 }
 
 fn execute_del(
@@ -345,6 +387,26 @@ fn execute_persist(
         .map_err(|_| DbError::LockPoisoned)?;
     
     Ok(guard.persist(key))
+}
+
+fn execute_incr(
+    key: &[u8],
+    db: &Arc<RwLock<Database>>
+) -> Result<i64, DbError> {
+    let mut guard = db.write()
+        .map_err(|_| DbError::LockPoisoned)?;
+
+    guard.incr(key)
+}
+
+fn execute_decr(
+    key: &[u8],
+    db: &Arc<RwLock<Database>>
+) -> Result<i64, DbError> {
+    let mut guard = db.write()
+        .map_err(|_| DbError::LockPoisoned)?;
+
+    guard.decr(key)
 }
 
 /// Checks the entry's TTL to determine if it is expired and removes it if needed.

@@ -205,6 +205,30 @@ impl Database {
             }
         }
     }
+
+    pub fn decr(&mut self, key: &[u8]) -> DbResult<i64> {
+        // Remove expired entry if necessary
+        self.remove_if_expired(key);
+
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                match entry.value.sub_integer(1) {
+                    Ok(i) => Ok(i),
+                    Err(err) => Err(err),
+                }
+            }
+            None => {
+                let attempt = self.set(key.to_vec(), vec!['0' as u8], SetOptions::default());
+                match attempt {
+                    Ok(_) => {
+                        // Attempt is only false with options. Always true here
+                        Ok(0)
+                    }
+                    Err(err) => Err(err)
+                }
+            }
+        }
+    }
 }
 
 
@@ -243,6 +267,30 @@ impl Value {
         Ok(result)
     }
 
+    pub fn sub_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+        let Value::String(string) = self else {
+            return Err(DbError::WrongType);
+        };
+
+        let current = match string {
+            StringValue::Integer(i) => *i,
+            StringValue::Bytes(bytes) => {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .ok_or(DbError::NotInteger)?
+            }
+        };
+
+        let result = current
+            .checked_sub(delta)
+            .ok_or(DbError::Underflow)?;
+
+        *string = StringValue::Integer(result);
+
+        Ok(result)
+    }
+
     pub fn copy(&self) -> Value {
         match self {
             Value::String(s_value) => Value::String(s_value.copy_value())
@@ -273,6 +321,7 @@ pub enum DbError {
     WrongType,
     NotInteger,
     Overflow,
+    Underflow,
 }
 
 pub enum TTL {
@@ -316,6 +365,9 @@ impl std::fmt::Display for DbError {
             }
             Self::Overflow => {
                 write!(f, "Integer overflow")
+            }
+            Self::Underflow => {
+                write!(f, "Integer underflow")
             }
         }
     }

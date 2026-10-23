@@ -3,23 +3,19 @@ use std::time::{Duration, SystemTime, SystemTimeError};
 
 pub struct Entry {
     value: Value,
-    expires_at: Option<SystemTime>,
-}
-
-impl Entry {
-    fn is_expired(&self, now: SystemTime) -> bool {
-        self.expires_at.is_some_and(|expiration| expiration <= now)
-    }
+    // String representation? Otherwise probably remove this...
 }
 
 pub struct Database {
-    entries: HashMap<Vec<u8>, Entry>
+    entries: HashMap<Vec<u8>, Entry>,
+    expirations: HashMap<Vec<u8>, SystemTime>,
 }
 
 impl Database {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            expirations: HashMap::new(),
         }
     }
 
@@ -33,7 +29,7 @@ impl Database {
         self.remove_if_expired(&key);
 
         // Check that the key exists
-        let exists = self.entries.contains_key(key.as_slice());
+        let exists = self.entries.contains_key(&key);
 
         match options.condition {
             SetCondition::IfAbsent if exists => { return Ok(false); }
@@ -50,26 +46,38 @@ impl Database {
             })
             .transpose()?;
 
+        // Insert the KV pair into the hashmaps
         self.entries.insert(
-            key, 
+            key.clone(), 
             Entry {
                 value: Value::String(StringValue::Bytes(value)),
-                expires_at,
         });
+        match expires_at {
+            Some(expiration) => {
+                self.expirations.insert(
+                    key,
+                    expiration
+                );
+            }
+            // Clear existing TTL if one exists
+            None => {
+                self.expirations.remove(&key);
+            }
+        }
 
         Ok(true)
     }
 
     pub fn get(&self, key: &[u8]) -> Option<&Value> {
-        Some(
-            self.entries
+        let entry = self.entries.get(key)?;
+
+        if self.expirations
             .get(key)
-            .filter(|entry| {
-                entry.expires_at
-                    .is_none_or(|expires_at| expires_at > SystemTime::now())
-            })
-            .map(|entry| &entry.value)?
-        )
+            .is_some_and(|&expiration| expiration <= SystemTime::now()) {
+                return None;
+            }
+        
+        Some(&entry.value)
     }
 
     pub fn del(&mut self, key: &[u8]) -> bool {
@@ -84,18 +92,19 @@ impl Database {
 
     // NOTE: Returns Result<> because an actual error (overflow) can occur
     pub fn expire(&mut self, key: &[u8], expire_in: Duration) -> DbResult<bool> {
-        match self.entries.get_mut(key) {
-            Some(entry) => {
+        match self.entries.get(key) {
+            Some(_) => {
                 let now = SystemTime::now();
 
                 // Make sure the entry hasn't already expired
-                match entry.expires_at {
-                    Some(expiration) => {
+                match self.expirations.get(key) {
+                    Some(&expiration) => {
                         if expiration > now {
-                            entry.expires_at = Some(
+                            self.expirations.insert(
+                                key.to_vec(), 
                                 now
-                                .checked_add(expire_in)
-                                .ok_or(DbError::InvalidExpiration)?
+                                    .checked_add(expire_in)
+                                    .ok_or(DbError::InvalidExpiration)?
                             );
                             Ok(true)
                         }
@@ -105,11 +114,12 @@ impl Database {
                         }
                         
                     }
-                    None => {
-                        entry.expires_at = Some(
+                    _ => {
+                        self.expirations.insert(
+                            key.to_vec(),
                             now
-                            .checked_add(expire_in)
-                            .ok_or(DbError::InvalidExpiration)?
+                                .checked_add(expire_in)
+                                .ok_or(DbError::InvalidExpiration)?
                         );
                         Ok(true)
                     }
@@ -123,13 +133,14 @@ impl Database {
         &mut self,
         key: &[u8],
     ) -> bool {
-        let now = SystemTime::now();
-        let expired = self.entries
-            .get(key)
-            .is_some_and(|entry| entry.is_expired(now));
+        let expired = match self.expirations.get(key) {
+            Some(&expiration) => expiration <= SystemTime::now(),
+            _ => false
+        };
 
         if expired {
             self.entries.remove(key);
+            self.expirations.remove(key);
         }
 
         expired
@@ -137,9 +148,9 @@ impl Database {
 
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
         match self.entries.get(key) {
-            Some(entry) => {
-                match entry.expires_at {
-                    Some(expiration) => {
+            Some(_) => {
+                match self.expirations.get(key) {
+                    Some(&expiration) => {
                         // Make sure the entry hasn't already expired
                         let now = SystemTime::now();
                         if expiration > now {
@@ -168,18 +179,7 @@ impl Database {
             return false
         }
 
-        match self.entries.get_mut(key) {
-            Some(entry) => {
-                match entry.expires_at {
-                    Some(_ttl) => { 
-                        entry.expires_at = None;
-                        true
-                    }
-                    _ => false
-                }
-            },
-            _ => false
-        }
+        self.expirations.remove(key).is_some()
     }
 
     pub fn incr(&mut self, key: &[u8]) -> DbResult<i64> {

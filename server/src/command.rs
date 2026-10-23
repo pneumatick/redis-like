@@ -206,6 +206,22 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
             _ => wrong_arity()
         }
     }
+    else if command.eq_ignore_ascii_case(b"INCR") {
+        match args {
+            [key] => {
+                match execute_incr(key, db) {
+                    Ok(i) => {
+                        RespValue::Integer(i)
+                    }
+                    Err(error) => {
+                        eprintln!("Database error: {error}");
+                        RespValue::Error("Err internal server error".into())
+                    }
+                }
+            }
+            _ => wrong_arity()
+        }
+    }
     else {
         RespValue::Error("ERR unknown command".into())
     }
@@ -311,7 +327,6 @@ fn execute_get(
                 Some(bytes.clone())
             }
             Some(Value::String(StringValue::Integer(n))) => {
-                println!("INTEGER!!!");                                         // Remove later
                 Some(n.to_string().into_bytes())
             }
             None => None,
@@ -356,6 +371,16 @@ fn execute_persist(
         .map_err(|_| DbError::LockPoisoned)?;
     
     Ok(guard.persist(key))
+}
+
+fn execute_incr(
+    key: &[u8],
+    db: &Arc<RwLock<Database>>
+) -> Result<i64, DbError> {
+    let mut guard = db.write()
+        .map_err(|_| DbError::LockPoisoned)?;
+
+    guard.incr(key)
 }
 
 /// Checks the entry's TTL to determine if it is expired and removes it if needed.

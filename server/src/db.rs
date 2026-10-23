@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, SystemTimeError};
+use indexmap::IndexMap;
 
 pub struct Entry {
     value: Value,
@@ -8,14 +9,14 @@ pub struct Entry {
 
 pub struct Database {
     entries: HashMap<Vec<u8>, Entry>,
-    expirations: HashMap<Vec<u8>, SystemTime>,
+    expirations: IndexMap<Vec<u8>, SystemTime>,
 }
 
 impl Database {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            expirations: HashMap::new(),
+            expirations: IndexMap::new(),
         }
     }
 
@@ -61,7 +62,7 @@ impl Database {
             }
             // Clear existing TTL if one exists
             None => {
-                self.expirations.remove(&key);
+                self.expirations.swap_remove(&key);
             }
         }
 
@@ -140,7 +141,7 @@ impl Database {
 
         if expired {
             self.entries.remove(key);
-            self.expirations.remove(key);
+            self.expirations.swap_remove(key);
         }
 
         expired
@@ -179,7 +180,7 @@ impl Database {
             return false
         }
 
-        self.expirations.remove(key).is_some()
+        self.expirations.swap_remove(key).is_some()
     }
 
     pub fn incr(&mut self, key: &[u8]) -> DbResult<i64> {

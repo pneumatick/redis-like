@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, SystemTimeError};
 use indexmap::IndexMap;
+use rand::RngExt;
 
 pub struct Entry {
     value: Value,
@@ -145,6 +146,40 @@ impl Database {
         }
 
         expired
+    }
+
+    pub fn remove_expired_sample(&mut self, count: u32) -> f64 {
+        let mut rng = rand::rng();
+        let now = SystemTime::now();
+        let mut removed = 0;
+
+        for _ in 0..count {
+            if self.expirations.is_empty() {
+                break;
+            }
+
+            let idx = rng.random_range(0..self.expirations.len());
+
+            let expired_key = {
+                let (key, expiration) = 
+                    self.expirations.get_index(idx).unwrap();
+                
+                if *expiration <= now {
+                    Some(key.clone())
+                }
+                else {
+                    None
+                }
+            };
+
+            if let Some(key) = expired_key {
+                if self.remove_if_expired(&key) {
+                    removed += 1
+                }
+            }
+        }
+
+        (removed / count).into()
     }
 
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {

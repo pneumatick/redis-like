@@ -140,14 +140,12 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
                 // <= 0 shouldn't make it here; 0 as default just in case for now
                 let expire_in = if command.eq_ignore_ascii_case(b"EXPIRE") {
                     Duration::from_secs(
-                        u64::try_from(time)
-                        .unwrap_or(0)
+                        u64::try_from(time).unwrap()
                     )
                 } 
                 else {
                     Duration::from_millis(
-                        u64::try_from(time)
-                        .unwrap_or(0)
+                        u64::try_from(time).unwrap()
                     )
                 };
 

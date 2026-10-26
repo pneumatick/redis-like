@@ -179,7 +179,7 @@ impl Database {
             }
         }
 
-        (removed / count).into()
+        f64::from(removed) / f64::from(count)
     }
 
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {

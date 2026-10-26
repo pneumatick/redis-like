@@ -1,7 +1,5 @@
 use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
 
-use core::time;
-//use std::fmt::Error;
 use std::io::{self, BufReader};
 use std::net::TcpStream;
 use std::sync::{Arc, RwLock};

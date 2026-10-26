@@ -1,5 +1,6 @@
 use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
 
+use core::time;
 //use std::fmt::Error;
 use std::io::{self, BufReader};
 use std::net::TcpStream;
@@ -120,10 +121,10 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
         match args {
             [key, expire_in_str] => {
                 // NOTE: Replace expect with proper error handling
-                let time = std::str::from_utf8(expire_in_str)
-                    .expect("Invalid UTF-8 sequence")
-                    .parse::<i64>()
-                    .expect("Not a valid integer");
+                let time = match parse_i64(expire_in_str) {
+                    Ok(time) => time,
+                    Err(err) => return RespValue::Error(err.into()),
+                };
                 
                 // Treat 0 and negative durations as DELs
                 if time <= 0 {
@@ -281,10 +282,7 @@ fn parse_set_options(
             let amount = args.get(i + 1)
                 .ok_or("ERR syntax error")?;
 
-            let amount = std::str::from_utf8(amount)
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-                .ok_or("ERR value is not an integer or out of range")?;
+            let amount = parse_i64(amount)?;
 
             if amount <= 0 {
                 return Err("ERR invalid expire time in 'set' command");
@@ -310,6 +308,14 @@ fn parse_set_options(
     }
 
     Ok(options)
+}
+
+// Helper function for converting byte arrays into i64s
+fn parse_i64(bytes: &[u8]) -> Result<i64, &'static str> {
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or("ERR value is not an integer or out of range")
 }
 
 fn execute_set(

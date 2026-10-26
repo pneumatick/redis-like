@@ -89,6 +89,7 @@ impl Database {
             return false
         }
 
+        self.expirations.swap_remove(key);
         self.entries.remove(key).is_some()
     }
 

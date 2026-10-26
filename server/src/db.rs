@@ -89,6 +89,7 @@ impl Database {
             return false
         }
 
+        self.expirations.swap_remove(key);
         self.entries.remove(key).is_some()
     }
 
@@ -179,7 +180,7 @@ impl Database {
             }
         }
 
-        (removed / count).into()
+        f64::from(removed) / f64::from(count)
     }
 
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
@@ -223,21 +224,11 @@ impl Database {
         self.remove_if_expired(key);
 
         match self.entries.get_mut(key) {
-            Some(entry) => {
-                match entry.value.add_integer(1) {
-                    Ok(i) => Ok(i),
-                    Err(err) => Err(err),
-                }
-            }
+            Some(entry) => entry.value.add_integer(1),
             None => {
-                let attempt = self.set(key.to_vec(), vec!['0' as u8], SetOptions::default());
-                match attempt {
-                    Ok(_) => {
-                        // Attempt is only false with options. Always true here
-                        Ok(1)
-                    }
-                    Err(err) => Err(err)
-                }
+                self.set(key.to_vec(), vec!['0' as u8], SetOptions::default())?;
+                // SET is only false with options, so always true here
+                self.incr(key)
             }
         }
     }
@@ -247,21 +238,11 @@ impl Database {
         self.remove_if_expired(key);
 
         match self.entries.get_mut(key) {
-            Some(entry) => {
-                match entry.value.sub_integer(1) {
-                    Ok(i) => Ok(i),
-                    Err(err) => Err(err),
-                }
-            }
+            Some(entry) => entry.value.sub_integer(1),
             None => {
-                let attempt = self.set(key.to_vec(), vec!['0' as u8], SetOptions::default());
-                match attempt {
-                    Ok(_) => {
-                        // Attempt is only false with options. Always true here
-                        Ok(0)
-                    }
-                    Err(err) => Err(err)
-                }
+                self.set(key.to_vec(), vec!['0' as u8], SetOptions::default())?;
+                // SET is only false with options, so always true here
+                self.decr(key)
             }
         }
     }

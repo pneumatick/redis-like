@@ -23,7 +23,7 @@ impl Database {
 
     /// Adds or overwrites a key-value pair to the database.
     /// 
-    /// Uses optional flags to set TTLs or to change behavior depending on 
+    /// Uses optional arguments to set TTLs or to change behavior depending on 
     /// whether or not an entry with the given key already exists.
     /// 
     /// Returns a `DbResult<bool>` which indicates whether or not the 
@@ -253,7 +253,7 @@ impl Database {
 
     /// Increment an integer value by one for the given key.
     /// 
-    /// If the given key does not exist, it will be added to the database 
+    /// If the key does not exist, it will be added to the database 
     /// with a default value of 1.
     /// 
     /// Returns a `DbResult<i64>` containing the incremented value.
@@ -271,6 +271,12 @@ impl Database {
         }
     }
 
+    /// Decrement an integer value by one for the given key.
+    /// 
+    /// If the key does not exist, it will be added to the database 
+    /// with a default value of -1.
+    /// 
+    /// Returns a `DbResult<i64>` containing the decremented value.
     pub fn decr(&mut self, key: &[u8]) -> DbResult<i64> {
         // Remove expired entry if necessary
         self.remove_if_expired(key);
@@ -298,7 +304,11 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn add_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+    /// Attempt to add an integer to the value.
+    /// 
+    /// Returns a `Result<i64, DbError>` containing the new integer, 
+    /// or an error in the case of value incompatibility or overflow.
+    pub fn add_integer(&mut self, delta: i64) -> DbResult<i64> {
         let Value::String(string) = self else {
             return Err(DbError::WrongType);
         };
@@ -322,7 +332,11 @@ impl Value {
         Ok(result)
     }
 
-    pub fn sub_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+    /// Attempt to subtract an integer to the value.
+    /// 
+    /// Returns a `Result<i64, DbError>` containing the new integer, 
+    /// or an error in the case of value incompatibility or underflow.
+    pub fn sub_integer(&mut self, delta: i64) -> DbResult<i64> {
         let Value::String(string) = self else {
             return Err(DbError::WrongType);
         };
@@ -346,6 +360,7 @@ impl Value {
         Ok(result)
     }
 
+    /// Create a new copy of a `Value`.
     pub fn copy(&self) -> Value {
         match self {
             Value::String(s_value) => Value::String(s_value.copy_value())
@@ -353,6 +368,12 @@ impl Value {
     }
 }
 
+/// Holds the actual type that a `Value::String` represents.
+/// 
+/// Since RESP2 encodes values such as integers as strings, a separate 
+/// `StringValue` type was created to simplify certain operations, such as 
+/// addition and subtraction for integers, so that decoding the string 
+/// representation every time such an operation is required is not necessary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StringValue {
     Bytes(Vec<u8>),
@@ -360,6 +381,7 @@ pub enum StringValue {
 }
 
 impl StringValue {
+    // Create a new copy of `StringValue`.
     pub fn copy_value(&self) -> StringValue {
         match self {
             StringValue::Bytes(v) => StringValue::Bytes(v.clone()),
@@ -379,6 +401,7 @@ pub enum DbError {
     Underflow,
 }
 
+/// Represent the TTL state for keys.
 pub enum TTL {
     Missing,
     Persistent,
@@ -386,17 +409,25 @@ pub enum TTL {
     ExpiresIn(Duration),
 }
 
+/// Represent optional conditional arguments that SET commands can handle.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum SetCondition {
     #[default]
+    /// Corresponds to the default where no optional argument is given in the 
+    /// command.
     Always,
-    IfAbsent,  // NX
-    IfPresent, // XX
+    /// Corresponds to the `NX` argument.
+    IfAbsent, 
+    /// Corresponds to the `XX` argument.
+    IfPresent,
 }
 
+/// Represent all optional arguments that SET commands can handle.
 #[derive(Debug, Default)]
 pub struct SetOptions {
+    /// Conditional arguments such as `NX` and `XX`.
     pub condition: SetCondition,
+    /// The TTL for the key-value pair if one was specified.
     pub expires_in: Option<Duration>,
 }
 

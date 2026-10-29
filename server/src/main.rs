@@ -8,6 +8,13 @@ use std::time::Duration;
 
 use crate::db::DbError;
 
+/// Handle the periodic cleanup cycle.
+/// 
+/// By default, the function is set to run roughly 10 times per second. It 
+/// takes a random sample of key-value pairs with TTLs (20 by default) 
+/// and removes any that are expired. If more than 25% were expired in that 
+/// sample, it immediately repeats the process and continues to do so until 
+/// 25% or less of the pairs in the sample were not expired.
 fn cleanup(db: &Arc<RwLock<db::Database>>) {
     let Ok(mut guard) = db.write()
         .map_err(|_| DbError::LockPoisoned)
@@ -23,6 +30,7 @@ fn cleanup(db: &Arc<RwLock<db::Database>>) {
     }
 }
 
+/// Handle an incoming request from a client.
 fn handle_client(stream: TcpStream, db: &Arc<RwLock<db::Database>>) -> io::Result<()> {
     command::handle_command(stream, db)
 }

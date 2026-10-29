@@ -21,6 +21,13 @@ impl Database {
         }
     }
 
+    /// Adds or overwrites a key-value pair to the database.
+    /// 
+    /// Uses optional arguments to set TTLs or to change behavior depending on 
+    /// whether or not an entry with the given key already exists.
+    /// 
+    /// Returns a `DbResult<bool>` which indicates whether or not the 
+    /// key-value pair was successfully added to the database.
     pub fn set(
         &mut self, 
         key: Vec<u8>, 
@@ -70,6 +77,9 @@ impl Database {
         Ok(true)
     }
 
+    /// Get the value associated with the given key if it exists.
+    /// 
+    /// Expired keys are treated as non-existent.
     pub fn get(&self, key: &[u8]) -> Option<&Value> {
         let entry = self.entries.get(key)?;
 
@@ -82,6 +92,7 @@ impl Database {
         Some(&entry.value)
     }
 
+    /// Remove a key-value pair from the database. 
     pub fn del(&mut self, key: &[u8]) -> bool {
         // Check for expiration first, remove if necessary and treat 
         // the key as though it didn't exist
@@ -93,7 +104,11 @@ impl Database {
         self.entries.remove(key).is_some()
     }
 
-    // NOTE: Returns Result<> because an actual error (overflow) can occur
+    /// Assign or modify a TTL for a key-value pair that exists in the 
+    /// database.
+    /// 
+    /// Returns `DbResult<bool>` indicating whether or not the assignment or 
+    /// modification was successful.
     pub fn expire(&mut self, key: &[u8], expire_in: Duration) -> DbResult<bool> {
         match self.entries.get(key) {
             Some(_) => {
@@ -132,6 +147,11 @@ impl Database {
         }
     }
 
+    /// Remove an key-value pair and all associated data from the database 
+    /// if it is expired.
+    /// 
+    /// Returns a `bool` which is true if the key was expired and removed, 
+    /// and false either if the key is not expired or if it doesn't exist.
     pub fn remove_if_expired(
         &mut self,
         key: &[u8],
@@ -149,6 +169,13 @@ impl Database {
         expired
     }
 
+    /// Sample a number of keys with TTLs and remove those that are expired.
+    /// 
+    /// This is called as a part of the persistent cleanup process which is 
+    /// done roughly 10 times per second by default.
+    /// 
+    /// Returns an `f64` ranging between 0.0 and 1.0 which describes the 
+    /// proportion of samples that were expired and removed. 
     pub fn remove_expired_sample(&mut self, count: u32) -> f64 {
         let mut rng = rand::rng();
         let now = SystemTime::now();
@@ -183,6 +210,7 @@ impl Database {
         f64::from(removed) / f64::from(count)
     }
 
+    /// Get the TTL for a given key-value pair.
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
         match self.entries.get(key) {
             Some(_) => {
@@ -209,6 +237,10 @@ impl Database {
         }
     }
 
+    /// Remove a TTL from a given key-value pair if one exists.
+    /// 
+    /// Returns a `bool` which is true if a TTL was present and removed, 
+    /// and false if the key either had no TTL or doesn't exist.
     pub fn persist(&mut self, key: &[u8]) -> bool {
         // Check for expiration first, remove if necessary and treat 
         // the key as though it didn't exist
@@ -219,6 +251,12 @@ impl Database {
         self.expirations.swap_remove(key).is_some()
     }
 
+    /// Increment an integer value by one for the given key.
+    /// 
+    /// If the key does not exist, it will be added to the database 
+    /// with a default value of 1.
+    /// 
+    /// Returns a `DbResult<i64>` containing the incremented value.
     pub fn incr(&mut self, key: &[u8]) -> DbResult<i64> {
         // Remove expired entry if necessary
         self.remove_if_expired(key);
@@ -233,6 +271,12 @@ impl Database {
         }
     }
 
+    /// Decrement an integer value by one for the given key.
+    /// 
+    /// If the key does not exist, it will be added to the database 
+    /// with a default value of -1.
+    /// 
+    /// Returns a `DbResult<i64>` containing the decremented value.
     pub fn decr(&mut self, key: &[u8]) -> DbResult<i64> {
         // Remove expired entry if necessary
         self.remove_if_expired(key);
@@ -260,7 +304,11 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn add_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+    /// Attempt to add an integer to the value.
+    /// 
+    /// Returns a `Result<i64, DbError>` containing the new integer, 
+    /// or an error in the case of value incompatibility or overflow.
+    pub fn add_integer(&mut self, delta: i64) -> DbResult<i64> {
         let Value::String(string) = self else {
             return Err(DbError::WrongType);
         };
@@ -284,7 +332,11 @@ impl Value {
         Ok(result)
     }
 
-    pub fn sub_integer(&mut self, delta: i64) -> Result<i64, DbError> {
+    /// Attempt to subtract an integer to the value.
+    /// 
+    /// Returns a `Result<i64, DbError>` containing the new integer, 
+    /// or an error in the case of value incompatibility or underflow.
+    pub fn sub_integer(&mut self, delta: i64) -> DbResult<i64> {
         let Value::String(string) = self else {
             return Err(DbError::WrongType);
         };
@@ -308,6 +360,7 @@ impl Value {
         Ok(result)
     }
 
+    /// Create a new copy of a `Value`.
     pub fn copy(&self) -> Value {
         match self {
             Value::String(s_value) => Value::String(s_value.copy_value())
@@ -315,6 +368,12 @@ impl Value {
     }
 }
 
+/// Holds the actual type that a `Value::String` represents.
+/// 
+/// Since RESP2 encodes values such as integers as strings, a separate 
+/// `StringValue` type was created to simplify certain operations, such as 
+/// addition and subtraction for integers, so that decoding the string 
+/// representation every time such an operation is required is not necessary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StringValue {
     Bytes(Vec<u8>),
@@ -322,6 +381,7 @@ pub enum StringValue {
 }
 
 impl StringValue {
+    // Create a new copy of `StringValue`.
     pub fn copy_value(&self) -> StringValue {
         match self {
             StringValue::Bytes(v) => StringValue::Bytes(v.clone()),
@@ -341,6 +401,7 @@ pub enum DbError {
     Underflow,
 }
 
+/// Represent the TTL state for keys.
 pub enum TTL {
     Missing,
     Persistent,
@@ -348,17 +409,25 @@ pub enum TTL {
     ExpiresIn(Duration),
 }
 
+/// Represent optional conditional arguments that SET commands can handle.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum SetCondition {
     #[default]
+    /// Corresponds to the default where no optional argument is given in the 
+    /// command.
     Always,
-    IfAbsent,  // NX
-    IfPresent, // XX
+    /// Corresponds to the `NX` argument.
+    IfAbsent, 
+    /// Corresponds to the `XX` argument.
+    IfPresent,
 }
 
+/// Represent all optional arguments that SET commands can handle.
 #[derive(Debug, Default)]
 pub struct SetOptions {
+    /// Conditional arguments such as `NX` and `XX`.
     pub condition: SetCondition,
+    /// The TTL for the key-value pair if one was specified.
     pub expires_in: Option<Duration>,
 }
 

@@ -5,6 +5,7 @@ const MAX_BULK_SIZE: usize = 1024 * 1024;
 const MAX_REQUEST_SIZE: usize = 4 * 1024 * 1024;
 
 
+/// Represents the RESP2 data types 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RespValue {
     SimpleString(String),
@@ -14,6 +15,7 @@ pub enum RespValue {
     Array(Option<Vec<RespValue>>),
 }
 
+/// Compose an `io::Error` for malformed request responses.
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
 }
@@ -109,7 +111,7 @@ pub fn read_request<R: BufRead>(
     Ok(Some(args))
 }
 
-// Write the response for the client
+// Compose and send a response to the client according to the RESP2 protocol.
 pub fn write_response<W: Write>(
     writer: &mut W,
     value: &RespValue,
@@ -153,12 +155,14 @@ pub fn write_response<W: Write>(
     }
 }
 
-// RESP simple strings and error cannot contain CR or LF.
+/// Write a single-line response for `RespValue::SimpleString` and 
+/// `RespValue::Error`.
 fn write_line<W: Write>(
     writer: &mut W,
     prefix: u8,
     text: &str,
 ) -> io::Result<()> {
+    // RESP simple strings and errors cannot contain CR or LF.
     if text.bytes().any(|b| b == b'\r' || b == b'\n') {
         return Err(invalid("Invalid RESP line"));
     }

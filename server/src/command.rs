@@ -11,6 +11,7 @@ use common::resp::{
     RespValue,
 };
 
+/// Read a command received by a client and write the requisite response.
 pub fn handle_command(
     stream: TcpStream, 
     db: &Arc<RwLock<Database>>
@@ -31,6 +32,9 @@ pub fn handle_command(
     Ok(())
 }
 
+/// Perform the necessary operations to execute the given command.
+/// 
+/// Returns the `RespValue` that will be written as a response to the client.
 fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     let Some((command, args)) = request.split_first() else {
         return RespValue::Error(
@@ -242,6 +246,10 @@ fn execute(request: &[Vec<u8>], db: &Arc<RwLock<Database>>) -> RespValue {
     }
 }
 
+/// Parse any and all optional arguments provided in a SET command.
+/// 
+/// Returns a `SetOptions` if the arguments are valid, otherwise 
+/// it returns an error string.
 fn parse_set_options(
     args: &[Vec<u8>],
 ) -> Result<SetOptions, &'static str> {
@@ -314,6 +322,10 @@ fn parse_i64(bytes: &[u8]) -> Result<i64, &'static str> {
         .ok_or("ERR value is not an integer or out of range")
 }
 
+/// Execute a `SET` command.
+/// 
+/// Returns a `bool` which indicates whether or not the 
+/// key-value pair was successfully added to the database.
 fn execute_set(
     key: &[u8], 
     value: &[u8], 
@@ -326,6 +338,10 @@ fn execute_set(
     guard.set(key.to_vec(), value.to_vec(), options)
 }
 
+/// Execute a `GET` command.
+/// 
+/// Returns an `Option<Vec<u8>>` containing the value when the pair exists in 
+/// the database.
 fn execute_get(
     key: &[u8],
     db: &Arc<RwLock<Database>>
@@ -354,6 +370,10 @@ fn execute_get(
     )
 }
 
+/// Execute a `DEL` command.
+/// 
+/// Returns a `bool` which indicates whether or not the deletion was 
+/// successful (i.e. the key was in the database).
 fn execute_del(
     key: &[u8],
     db: &Arc<RwLock<Database>>
@@ -364,6 +384,10 @@ fn execute_del(
     Ok(guard.del(key))
 }
 
+/// Execute an `EXPIRE` command.
+/// 
+/// Returns a `bool` which indicates whether or not the expiration assigment 
+/// was successful.
 fn execute_expire(
     key: &[u8],
     expire_in: Duration,
@@ -375,6 +399,9 @@ fn execute_expire(
     guard.expire(key, expire_in)
 }
 
+/// Execute a `TTL` command.
+/// 
+/// Returns a `TTL` type describing the state of the key-value pair's TTL.
 fn execute_ttl(
     key: &[u8],
     db: &Arc<RwLock<Database>>
@@ -383,6 +410,10 @@ fn execute_ttl(
     remove_if_expired(key, db)
 }
 
+/// Execute a `PERSIST` command.
+/// 
+/// Returns a `bool` which indicates whether or not the TTL could be removed 
+/// from the key-value pair (i.e. the key exists in the database).
 fn execute_persist(
     key: &[u8],
     db: &Arc<RwLock<Database>>
@@ -393,6 +424,9 @@ fn execute_persist(
     Ok(guard.persist(key))
 }
 
+/// Execute an `INCR` command.
+/// 
+/// Returns the incremented value corresponding to the key.
 fn execute_incr(
     key: &[u8],
     db: &Arc<RwLock<Database>>
@@ -403,6 +437,9 @@ fn execute_incr(
     guard.incr(key)
 }
 
+/// Execute a `DECR` command.
+/// 
+/// Returns the decremented value corresponding to the key.
 fn execute_decr(
     key: &[u8],
     db: &Arc<RwLock<Database>>

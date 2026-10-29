@@ -21,6 +21,13 @@ impl Database {
         }
     }
 
+    /// Adds or overwrites a key-value pair to the database.
+    /// 
+    /// Uses optional flags to set TTLs or to change behavior depending on 
+    /// whether or not an entry with the given key already exists.
+    /// 
+    /// Returns a `DbResult<bool>` which indicates whether or not the 
+    /// key-value pair was successfully added to the database.
     pub fn set(
         &mut self, 
         key: Vec<u8>, 
@@ -70,6 +77,9 @@ impl Database {
         Ok(true)
     }
 
+    /// Get the value associated with the given key if it exists.
+    /// 
+    /// Expired keys are treated as non-existent.
     pub fn get(&self, key: &[u8]) -> Option<&Value> {
         let entry = self.entries.get(key)?;
 
@@ -82,6 +92,7 @@ impl Database {
         Some(&entry.value)
     }
 
+    /// Remove a key-value pair from the database. 
     pub fn del(&mut self, key: &[u8]) -> bool {
         // Check for expiration first, remove if necessary and treat 
         // the key as though it didn't exist
@@ -93,7 +104,11 @@ impl Database {
         self.entries.remove(key).is_some()
     }
 
-    // NOTE: Returns Result<> because an actual error (overflow) can occur
+    /// Assign or modify a TTL for a key-value pair that exists in the 
+    /// database.
+    /// 
+    /// Returns `DbResult<bool>` indicating whether or not the assignment or 
+    /// modification was successful.
     pub fn expire(&mut self, key: &[u8], expire_in: Duration) -> DbResult<bool> {
         match self.entries.get(key) {
             Some(_) => {
@@ -132,6 +147,11 @@ impl Database {
         }
     }
 
+    /// Remove an key-value pair and all associated data from the database 
+    /// if it is expired.
+    /// 
+    /// Returns a `bool` which is true if the key was expired and removed, 
+    /// and false either if the key is not expired or if it doesn't exist.
     pub fn remove_if_expired(
         &mut self,
         key: &[u8],
@@ -149,6 +169,13 @@ impl Database {
         expired
     }
 
+    /// Sample a number of keys with TTLs and remove those that are expired.
+    /// 
+    /// This is called as a part of the persistent cleanup process which is 
+    /// done roughly 10 times per second by default.
+    /// 
+    /// Returns an `f64` ranging between 0.0 and 1.0 which describes the 
+    /// proportion of samples that were expired and removed. 
     pub fn remove_expired_sample(&mut self, count: u32) -> f64 {
         let mut rng = rand::rng();
         let now = SystemTime::now();
@@ -183,6 +210,7 @@ impl Database {
         f64::from(removed) / f64::from(count)
     }
 
+    /// Get the TTL for a given key-value pair.
     pub fn ttl(&self, key: &[u8]) -> DbResult<TTL> {
         match self.entries.get(key) {
             Some(_) => {
@@ -209,6 +237,10 @@ impl Database {
         }
     }
 
+    /// Remove a TTL from a given key-value pair if one exists.
+    /// 
+    /// Returns a `bool` which is true if a TTL was present and removed, 
+    /// and false if the key either had no TTL or doesn't exist.
     pub fn persist(&mut self, key: &[u8]) -> bool {
         // Check for expiration first, remove if necessary and treat 
         // the key as though it didn't exist
@@ -219,6 +251,12 @@ impl Database {
         self.expirations.swap_remove(key).is_some()
     }
 
+    /// Increment an integer value by one for the given key.
+    /// 
+    /// If the given key does not exist, it will be added to the database 
+    /// with a default value of 1.
+    /// 
+    /// Returns a `DbResult<i64>` containing the incremented value.
     pub fn incr(&mut self, key: &[u8]) -> DbResult<i64> {
         // Remove expired entry if necessary
         self.remove_if_expired(key);

@@ -1,25 +1,27 @@
 # Redis-like
 
-A work-in-progress, Redis-inspired in-memory key–value server written in **Rust**. The project recreates a subset of Redis's commands and behavior while exploring TCP networking, the Redis Serialization Protocol (RESP2), concurrent access, string encodings, and key expiration.
+A Redis-inspired, in-memory key–value server written in **Rust**. This project implements a growing subset of Redis commands and RESP2 behavior, with a focus on network protocol design, asynchronous TCP handling, concurrency, internal data representation, and key expiration.
 
-This is a learning and systems-programming project, **not a production-ready Redis replacement**. The emphasis is on building the core functionality from the ground up rather than wrapping an existing Redis server.
+Redis-like is an **educational systems-programming project**, not a production-ready replacement for Redis. It implements the server and protocol handling from scratch rather than embedding an existing Redis server.
 
 ## Features
 
-- **RESP2-compatible command framing:** accepts arrays of bulk strings over TCP and encodes RESP2 replies.
-- **Concurrent connections:** serves multiple clients using threads and an `Arc<RwLock<Database>>` shared database.
-- **Binary-safe keys and string values:** stores keys and values as byte sequences; string values may also use an internal integer representation after arithmetic operations.
-- **Conditional writes:** `SET` supports `NX` and `XX`, with optional `EX` and `PX` expiration durations.
-- **Key expiration:** supports lazy expiration on access and active cleanup using randomized sampling of keys with deadlines.
-- **Integer operations:** includes `INCR` and `DECR` with checked arithmetic on existing numeric strings.
-- **Tests:** includes protocol-level tests and command tests for `SET` options, expiration behavior, and concurrent conditional writes.
+- **Asynchronous TCP networking:** Tokio accepts client connections and handles each connection in a lightweight task.
+- **I/O-independent RESP2 request parser:** Decodes arrays of bulk strings from byte slices; reports complete, incomplete, or invalid frames without performing network I/O.
+- **Buffered connections:** Uses `BytesMut` to accumulate fragmented requests and preserve subsequent pipelined requests, with asynchronous response writes.
+- **Binary-safe string storage:** Keys and string values can contain arbitrary bytes. Integer-valued strings may use a dedicated internal `i64` representation.
+- **Shared database:** An `Arc<RwLock<Database>>` coordinates concurrent client access. Read–modify–write operations use exclusive locking.
+- **Conditional and expiring writes:** `SET` supports `NX`, `XX`, `EX`, and `PX`.
+- **Lazy and active expiration:** Expired keys are treated as absent on access; a dedicated cleanup thread periodically samples expiration deadlines and reclaims expired entries.
+- **Integer arithmetic:** `INCR` and `DECR` perform checked signed 64-bit operations.
+- **Automated testing:** Command behavior, RESP2 framing, fragmented and pipelined requests, Tokio connections, and concurrency are covered by Rust tests.
 
 ## Getting started
 
 ### Requirements
 
-- Rust and Cargo, with support for the **Rust 2024 edition** (Rust 1.85 or newer).
-- Optional: [`redis-cli`](https://redis.io/docs/latest/develop/tools/cli/) to interact with the server. A standalone client is not yet implemented in this workspace.
+- Rust and Cargo with support for **Rust edition 2024** (Rust **1.85+**).
+- Optional: [`redis-cli`](https://redis.io/docs/latest/develop/tools/cli/) to interact with the server. The workspace's `client` crate is still a placeholder.
 
 ### Build and run
 
@@ -29,151 +31,203 @@ cd redis-like
 cargo run -p server
 ```
 
-The server currently listens on **`127.0.0.1:43210`**. The address and port are set in `server/src/main.rs` and are not yet configurable through command-line options.
+The server listens on **`127.0.0.1:43210`**. This endpoint is currently hard-coded in `server/src/main.rs`.
 
-In another terminal, connect using `redis-cli` in RESP2 mode:
+In another terminal, connect with RESP2 enabled:
 
 ```bash
 redis-cli -2 -h 127.0.0.1 -p 43210
 ```
 
-Try a few commands:
+Example session (enter these commands at the `redis-cli` prompt):
 
-```redis
+```text
 PING
 SET greeting hello
 GET greeting
-SET session token EX 60 NX
+SET session token NX EX 60
 TTL session
 SET counter 1
 INCR counter
 DECR counter
+PEXPIRE session 5000
 PERSIST session
 DEL greeting counter session
 ```
 
-You can also run individual commands without entering interactive mode:
+Or send one command without opening an interactive session:
 
 ```bash
 redis-cli -2 -h 127.0.0.1 -p 43210 SET message hello
 redis-cli -2 -h 127.0.0.1 -p 43210 GET message
 ```
 
-Only the commands listed below are implemented; some additional Redis commands issued automatically by particular clients may receive an unknown-command error.
+Only the commands listed below are implemented. Some Redis clients may issue additional commands automatically and receive an unknown-command response.
 
 ## Supported commands
 
-| Command | Description |
+| Command | Behavior |
 | --- | --- |
-| `PING [message]` | Test connectivity; optionally echo a message. |
-| `SET key value [EX seconds \| PX milliseconds] [NX \| XX]` | Create or overwrite a string, optionally with an expiration or existence condition. |
-| `GET key` | Retrieve a string value; return null if the key is missing or expired. |
-| `DEL key [key ...]` | Delete one or more keys. |
-| `EXPIRE key seconds` | Set a key's expiration in seconds. |
-| `PEXPIRE key milliseconds` | Set a key's expiration in milliseconds. |
-| `TTL key` | Get the remaining lifetime in seconds (`-1` for persistent keys, `-2` for missing or expired keys). |
+| `PING [message]` | Check connectivity; optionally echo a bulk-string message. |
+| `SET key value [EX seconds \| PX milliseconds] [NX \| XX]` | Store or replace a string, optionally with a deadline or an existence condition. |
+| `GET key` | Return the value as a bulk string, or null for a missing or expired key. |
+| `DEL key [key ...]` | Remove one or more keys; return the number removed. |
+| `EXPIRE key seconds` | Set or update a deadline using seconds. |
+| `PEXPIRE key milliseconds` | Set or update a deadline using milliseconds. |
+| `TTL key` | Get remaining lifetime in seconds; `-1` means no expiration and `-2` means missing or expired. |
 | `PERSIST key` | Remove a key's expiration. |
-| `INCR key` | Increment an integer-valued string. |
-| `DECR key` | Decrement an integer-valued string. |
+| `INCR key` | Increment an integer-valued string by one. |
+| `DECR key` | Decrement an integer-valued string by one. |
 
-`SET` accepts the option order supported by the current parser, such as `SET key value NX EX 60` and `SET key value EX 60 NX`. Conflicting or repeated options are rejected.
+For `SET`, expiration and existence conditions can appear in either supported order (for example, `SET k v EX 60 NX` or `SET k v NX EX 60`). Conflicting or duplicate options are rejected. A successful ordinary `SET` clears an existing expiration, while a failed conditional write leaves the existing entry unchanged.
 
-This is a **subset of Redis**, not a complete implementation of Redis's protocol, data types, or command semantics. See [Current limitations](#current-limitations).
+This is a **subset of Redis**, not full command or protocol compatibility.
 
 ## Architecture
 
-The repository is a Cargo workspace with three crates:
+The project is organized as a Cargo workspace:
 
 ```text
 redis-like/
-├── Cargo.toml          # Workspace definition
+├── Cargo.toml
 ├── common/
 │   └── src/
 │       ├── lib.rs
-│       └── resp.rs     # RESP2 request decoder and response encoder
+│       ├── resp.rs                  # RESP2 parser, reply types, encoder
+│       └── resp_tests.rs            # Parser and encoding tests
 ├── server/
 │   └── src/
-│       ├── main.rs     # TCP listener, connection threads, cleanup worker
-│       ├── command.rs  # Command parsing, validation, and execution
-│       └── db.rs       # In-memory data model and database operations
+│       ├── main.rs                  # Tokio listener and cleanup worker
+│       ├── connection.rs            # Buffered asynchronous TCP I/O
+│       ├── command.rs               # Argument validation and command execution
+│       ├── db.rs                    # In-memory database and expiration logic
+│       ├── command_tests.rs         # Command behavior and concurrency tests
+│       └── connection_tokio_tests.rs # Connection and network integration tests
 └── client/
     └── src/
-        └── main.rs     # Placeholder for a future client
+        └── main.rs                  # Placeholder for a future CLI
 ```
 
-### Request flow
+### Request lifecycle
 
-1. The server accepts a TCP connection and starts a handler thread.
-2. The shared RESP2 decoder reads a complete command from the byte stream.
-3. The command layer validates arguments and dispatches the requested operation.
-4. The command handler acquires the appropriate database lock and executes the operation.
-5. The result is serialized as a RESP2 response and sent back to the client.
+```text
+Redis-compatible client
+        │ TCP / RESP2
+        ▼
+Tokio TCP listener (main.rs)
+        │ spawns one task per connection
+        ▼
+Buffered Connection (connection.rs)
+        │ accumulates bytes in BytesMut
+        ▼
+RESP2 parser (common/src/resp.rs)
+        │ complete / incomplete / malformed frame
+        ▼
+Command executor (command.rs)
+        │ synchronously executes the operation
+        ▼
+Shared database (db.rs)
+        │ Arc<RwLock<Database>>
+        ▼
+RESP2 reply encoder → async TCP write
+```
 
-The server can process several commands over one connection. Database operations are protected by an `RwLock`, allowing multiple concurrent readers or one writer at a time. Read–modify–write operations such as conditional `SET` and `INCR` use exclusive access.
+The listener and socket operations are asynchronous; **database commands remain synchronous**. Each command's database locks are released before awaiting response writes. The shared `RwLock` allows concurrent readers or a single writer; operations that must read and modify a key, such as `SET NX` and `INCR`, execute under a write lock.
+
+### RESP2 framing
+
+`common::resp::parse_request(&[u8])` does **not** read from a socket or depend on an async runtime. It returns one of three outcomes:
+
+- **Complete:** Parsed argument bytes and the number of input bytes consumed.
+- **Incomplete:** More bytes are needed to finish a request.
+- **Invalid:** Malformed data or a limit violation.
+
+`Connection` handles the surrounding async I/O: it reads bytes into a `BytesMut` buffer, tries parsing, and advances the buffer only when a complete request is available. This handles TCP fragmentation and preserves any following pipelined requests.
+
+Responses use the existing `RespValue` model and RESP2 serializer. They are serialized into a reusable buffer and written asynchronously. Incoming commands are currently expected as **arrays of non-null bulk strings**, rather than arbitrary RESP2 messages or inline commands.
+
+The parser enforces bounds on argument count, individual bulk-string size, total request payload size, and numeric header length. Current defaults include a maximum of **1,024 arguments**, **1 MiB per bulk string**, and **4 MiB total bulk-string payload per request**. These are implementation-specific limits, not Redis's defaults.
 
 ### Storage and expiration
 
-Stored entries and expiration deadlines are maintained in separate maps:
+The database maintains two data structures:
 
-- `HashMap<Vec<u8>, Entry>` stores keys and their values.
-- `IndexMap<Vec<u8>, SystemTime>` stores deadlines **only for keys with an expiration**.
+- `HashMap<Vec<u8>, Entry>` holds the primary key–value entries.
+- `IndexMap<Vec<u8>, SystemTime>` holds expiration deadlines for keys with a TTL.
 
-The value model distinguishes Redis string values from their internal encoding: string values can be held as raw bytes or as a signed integer. This leaves room for adding other Redis data types later.
+`Value::String` currently supports both `StringValue::Bytes(Vec<u8>)` and `StringValue::Integer(i64)`. This distinction concerns *internal encoding*: integer-valued keys are still Redis strings, and `GET` returns their decimal byte representation.
 
-Expiration is managed in two complementary ways:
+Expiration uses two complementary mechanisms:
 
-- **Lazy expiration:** an expired key is treated as absent when it is accessed, with removal performed when appropriate.
-- **Active expiration:** a dedicated cleanup thread runs approximately ten times per second, selecting small random samples from the expiration index and deleting expired keys. The current sampling and scheduling strategy is experimental and may be refined.
+1. **Lazy expiration:** Commands treat expired keys as absent and remove them when appropriate. Read operations can inspect expiration under a read lock and acquire a write lock for cleanup when needed.
+2. **Active expiration:** An ordinary background OS thread runs approximately every **100 ms**, samples up to **20 expiration entries per batch**, and repeats a batch when more than **25%** of sampled entries were removed. This worker shares the database lock with client tasks.
 
-Because the expiration index contains only expiring keys, background cleanup need not scan every permanent key in the database.
+The separate expiration index allows cleanup to sample only keys with deadlines rather than scanning all persistent keys. The current cleanup scheduling and lock-holding behavior remain experimental.
 
 ## Testing
 
-Run the full workspace test suite:
+Run all workspace tests:
 
 ```bash
 cargo test --workspace
 ```
 
-Or run the server and protocol tests separately:
+Run each crate separately:
 
 ```bash
-cargo test -p server
 cargo test -p common
+cargo test -p server
 ```
 
-Current tests cover RESP2 framing and replies, `SET` options and their error cases, TTL behavior, and concurrent `SET NX` attempts. Additional end-to-end, fuzz, and performance tests are planned.
+Run the focused suites (their module names reflect the current source registrations):
+
+```bash
+# I/O-independent RESP2 parser and response encoding
+cargo test -p common resp::resp_tests
+
+# Command semantics, expiration, and atomicity
+cargo test -p server command::command_tests
+
+# Tokio connection and TCP integration behavior
+cargo test -p server command::tokio_tests
+```
+
+The test suites cover normal and invalid command arguments, conditional writes, arithmetic, expiration, binary payloads, partially received frames, multiple requests per connection, EOF behavior, and concurrent clients. Tokio network tests use **ephemeral local ports**, so the main server does not need to be running for them.
 
 ## Current limitations
 
-- **In-memory only:** all stored data is lost when the server exits; persistence is not implemented.
-- **Limited command and type support:** lists, sets, hashes, transactions, replication, and clustering are not implemented.
-- **Partial RESP2 support:** command decoding expects arrays of bulk strings; inline requests and general-purpose decoding of every RESP2 type are not provided.
-- **Experimental correctness:** command edge cases, including arithmetic on nonexistent keys, still need further compatibility testing against Redis.
-- **Fixed local configuration:** the server listens on `127.0.0.1:43210` without authentication or configuration support.
-- **Thread-per-connection model:** the implementation favors clarity over high-connection-count scalability.
-- **No dedicated CLI yet:** `client` remains a placeholder; use a compatible Redis client for now.
+- **No persistence:** All data is lost when the server stops. AOF/RDB storage and recovery have not been implemented.
+- **Only string data:** Lists, sets, hashes, sorted sets, streams, transactions, and other Redis facilities are not yet supported.
+- **Partial RESP2 compatibility:** The request parser handles arrays of bulk strings, not inline commands, RESP3, or arbitrary nested input types.
+- **Limited Redis command coverage:** Many standard commands, including `PTTL`, are not yet implemented; some edge cases may differ from Redis.
+- **Experimental concurrency:** Async networking does not make database execution nonblocking; short synchronous operations still use a shared `std::sync::RwLock`. Multi-key operations are not yet guaranteed to reproduce all Redis atomicity semantics.
+- **No operational hardening:** Connection limits, idle/read timeouts, authentication, TLS, configurable listening endpoints, and graceful shutdown are not implemented.
+- **Experimental cleanup:** Active expiration is sampled in a separate thread and does not yet enforce a strict per-cycle CPU or lock-holding budget.
+- **No standalone client:** The `client` crate is currently a placeholder.
 
-Do not expose this server to untrusted networks or use it to store important data.
+**Do not expose this server to untrusted networks or use it for important data.** Its default loopback binding is intentional.
 
 ## Roadmap
 
-- [x] Basic in-memory string storage
-- [x] RESP2 request decoding and response encoding
-- [x] Concurrent TCP client handling
-- [x] Conditional `SET` with optional expiration
+- [x] In-memory binary-safe string storage
+- [x] RESP2 request parsing and response serialization
+- [x] Conditional `SET` with `NX`, `XX`, `EX`, and `PX`
 - [x] `EXPIRE`, `PEXPIRE`, `TTL`, and `PERSIST`
-- [x] Lazy expiration and periodic active cleanup
-- [x] Initial `INCR` and `DECR` support
-- [ ] Harden edge cases and expand command/integration tests
-- [ ] Improve active-expiration sampling and cleanup time budgets
-- [ ] Add `PTTL`, additional string operations, and more Redis data types
-- [ ] Implement persistence and restart recovery
-- [ ] Build the client CLI
-- [ ] Add configuration, benchmarks, and stress testing
+- [x] `INCR` and `DECR`
+- [x] Lazy expiration and sampled active cleanup
+- [x] Tokio-based concurrent TCP connections
+- [x] I/O-independent incremental framing with `BytesMut`
+- [x] Command, parser, and asynchronous network tests
+- [ ] Add connection limits, timeouts, graceful shutdown, and cleanup work budgets
+- [ ] Improve Redis compatibility and add further string commands (`PTTL`, `INCRBY`, etc.)
+- [ ] Add other Redis data types and commands
+- [ ] Implement append-only persistence and restart recovery
+- [ ] Build a dedicated Rust client CLI
+- [ ] Benchmark throughput, latency, memory, and lock contention
+- [ ] Add stress testing, fuzzing, configuration, and automated CI
 
-## Why this project?
+## Motivation
 
-Redis provides an interesting reference point for exploring real systems concerns: byte-stream protocol parsing, data representation, concurrency, atomic operations, expiration, and persistence. This project aims to implement those ideas incrementally in Rust, with correctness and clear separation of responsibilities as primary goals.
+Redis is a useful reference system for learning about wire protocols, in-memory databases, asynchronous networking, synchronization, expiration algorithms, and persistence. This project develops those ideas incrementally in Rust, prioritizing understandable components and observable behavior over feature completeness.
 
 Redis is a project and trademark of Redis Ltd. This repository is an independent educational implementation and is not affiliated with or endorsed by Redis Ltd.

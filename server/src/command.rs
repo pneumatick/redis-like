@@ -1,4 +1,5 @@
 use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
+use crate::connection::Connection;
 
 use std::io;
 use std::sync::{Arc, RwLock};
@@ -19,23 +20,13 @@ pub async fn handle_command(
     stream: TcpStream, 
     db: &Arc<RwLock<Database>>
 ) -> io::Result<()> {
-    let mut reader = BufReader::new(stream);
-    let mut output = Vec::new();
+    let mut connection = Connection::new(stream);
 
-    loop {
-        let args = match read_request_async(&mut reader).await? {
-            Some(args) => args,
-            None => break
-        };
-
-        // NOTE: Database operations reamin synchronous
+    while let Some(args) = connection.read_request().await? {
+        // NOTE: Synchronous database operation execution
         let response = execute(&args, db);
 
-        output.clear();
-        write_response(&mut output, &response)?;
-
-        // Asynchronously write the response to the socket
-        reader.get_mut().write_all(&output).await?;
+        connection.write_response(&response).await?;
     }
 
     Ok(())

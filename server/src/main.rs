@@ -1,5 +1,6 @@
 mod command;
 mod db;
+mod connection;
 
 use std::io;
 use std::sync::{Arc, RwLock};

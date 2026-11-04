@@ -1,4 +1,7 @@
 use std::io::{self, BufRead, Write};
+use std::marker::Unpin;
+
+use tokio::io::{AsyncBufRead, AsyncReadExt};
 
 const MAX_ARGS: usize = 1024;
 const MAX_BULK_SIZE: usize = 1024 * 1024;
@@ -28,6 +31,31 @@ fn read_number<R: BufRead>(reader: &mut R) -> io::Result<i64> {
     for _ in 0..32 {
         let mut byte = [0u8; 1];
         reader.read_exact(&mut byte)?;
+        line.push(byte[0]);
+
+        if line.ends_with(b"\r\n") {
+            let digits = &line[..line.len() - 2];
+
+            let text = std::str::from_utf8(digits)
+                .map_err(|_| invalid("Invalid numeric header"))?;
+
+            return text.parse::<i64>()
+                .map_err(|_| invalid("Invalid integer"));
+        }
+    }
+
+    Err(invalid("Header too long"))
+}
+
+async fn read_number_async<R>(reader: &mut R) -> io::Result<i64> 
+where 
+    R: AsyncBufRead + Unpin,
+{
+    let mut line: Vec<u8> = Vec::with_capacity(16);
+
+    for _ in 0..32 {
+        let mut byte = [0u8; 1];
+        reader.read_exact(&mut byte).await?;
         line.push(byte[0]);
 
         if line.ends_with(b"\r\n") {
@@ -111,7 +139,71 @@ pub fn read_request<R: BufRead>(
     Ok(Some(args))
 }
 
-// Compose and send a response to the client according to the RESP2 protocol.
+pub async fn read_request_async<R>(
+    reader: &mut R,
+) -> io::Result<Option<Vec<Vec<u8>>>>
+where 
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut prefix = [0u8; 1];
+
+    // Handle client disconnect (EOF)
+    if reader.read(&mut prefix).await? == 0 {
+        return Ok(None);
+    }
+
+    if prefix[0] !=b'*' {
+        return Err(invalid("Expected RESP array"));
+    }
+
+    let count = usize::try_from(read_number_async(reader).await?)
+        .map_err(|_| invalid("Invalid argument count"))?;
+
+    if count == 0 || count > MAX_ARGS {
+        return Err(invalid("Invalid argument count"));
+    }
+
+    let mut args = Vec::with_capacity(count);
+    let mut total_size = 0usize;
+
+    for _ in 0..count {
+        reader.read_exact(&mut prefix).await?;
+
+        if prefix[0] != b'$' {
+            return Err(invalid("Expected bulk string"));
+        }
+
+        let size = usize::try_from(read_number_async(reader).await?)
+            .map_err(|_| invalid("Invalid bulk length"))?;
+
+        if size > MAX_BULK_SIZE {
+            return Err(invalid("Bulk string too large"));
+        }
+
+        total_size = total_size.checked_add(size)
+            .ok_or_else(|| invalid("Request too large"))?;
+
+        if total_size > MAX_REQUEST_SIZE {
+            return Err(invalid("Request too large"));
+        }
+
+        let mut data = vec![0u8; size];
+        reader.read_exact(&mut data).await?;
+
+        let mut ending = [0u8; 2];
+        reader.read_exact(&mut ending).await?;
+
+        if ending != *b"\r\n" {
+            return Err(invalid("Missing CRLF"));
+        }
+
+        args.push(data);
+    }
+
+    Ok(Some(args))
+}
+
+// Compose a response according to the RESP2 protocol.
 pub fn write_response<W: Write>(
     writer: &mut W,
     value: &RespValue,

@@ -7,3 +7,6 @@ edition = "2021"
 name = "common"
 path = "src/lib.rs"
 
+[dependencies]
+tokio = "1.54.1"
+

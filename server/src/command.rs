@@ -1,32 +1,41 @@
 use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
 
-use std::io::{self, BufReader};
-use std::net::TcpStream;
+use std::io;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+
 use common::resp::{
-    read_request,
+    //read_request,
+    read_request_async,
     write_response,
     RespValue,
 };
 
 /// Read a command received by a client and write the requisite response.
-pub fn handle_command(
+pub async fn handle_command(
     stream: TcpStream, 
     db: &Arc<RwLock<Database>>
 ) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
+    let mut output = Vec::new();
 
     loop {
-        let args = match read_request(&mut reader)? {
+        let args = match read_request_async(&mut reader).await? {
             Some(args) => args,
             None => break
         };
 
+        // NOTE: Database operations reamin synchronous
         let response = execute(&args, db);
 
-        write_response(reader.get_mut(), &response)?;
+        output.clear();
+        write_response(&mut output, &response)?;
+
+        // Asynchronously write the response to the socket
+        reader.get_mut().write_all(&output).await?;
     }
 
     Ok(())

@@ -1,8 +1,12 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
+use std::ops::Range;
 
 const MAX_ARGS: usize = 1024;
 const MAX_BULK_SIZE: usize = 1024 * 1024;
 const MAX_REQUEST_SIZE: usize = 4 * 1024 * 1024;
+const MAX_HEADER_LEN: usize = 32;
+pub const MAX_FRAME_BYTES: usize =
+    MAX_REQUEST_SIZE + (MAX_ARGS + 1) * (MAX_HEADER_LEN + 3);
 
 
 /// Represents the RESP2 data types 
@@ -20,98 +24,7 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
 }
 
-// Read a CRLF-terminated decimal number. Header length limited to prevent 
-// unbounded reads.
-fn read_number<R: BufRead>(reader: &mut R) -> io::Result<i64> {
-    let mut line: Vec<u8> = Vec::with_capacity(16);
-
-    for _ in 0..32 {
-        let mut byte = [0u8; 1];
-        reader.read_exact(&mut byte)?;
-        line.push(byte[0]);
-
-        if line.ends_with(b"\r\n") {
-            let digits = &line[..line.len() - 2];
-
-            let text = std::str::from_utf8(digits)
-                .map_err(|_| invalid("Invalid numeric header"))?;
-
-            return text.parse::<i64>()
-                .map_err(|_| invalid("Invalid integer"));
-        }
-    }
-
-    Err(invalid("Header too long"))
-}
-
-/// Read one RESP2 command.
-/// 
-/// Returns:
-/// - Ok(Some(args)) for a complete command
-/// - Ok(None) for a clean disconnect between commands
-/// - Err(...) for malformed or truncated data
-pub fn read_request<R: BufRead>(
-    reader: &mut R,
-) -> io::Result<Option<Vec<Vec<u8>>>> {
-    let mut prefix = [0u8; 1];
-
-    // Handle client disconnect (EOF)
-    if reader.read(&mut prefix)? == 0 {
-        return Ok(None);
-    }
-
-    if prefix[0] !=b'*' {
-        return Err(invalid("Expected RESP array"));
-    }
-
-    let count = usize::try_from(read_number(reader)?)
-        .map_err(|_| invalid("Invalid argument count"))?;
-
-    if count == 0 || count > MAX_ARGS {
-        return Err(invalid("Invalid argument count"));
-    }
-
-    let mut args = Vec::with_capacity(count);
-    let mut total_size = 0usize;
-
-    for _ in 0..count {
-        reader.read_exact(&mut prefix)?;
-
-        if prefix[0] != b'$' {
-            return Err(invalid("Expected bulk string"));
-        }
-
-        let size = usize::try_from(read_number(reader)?)
-            .map_err(|_| invalid("Invalid bulk length"))?;
-
-        if size > MAX_BULK_SIZE {
-            return Err(invalid("Bulk string too large"));
-        }
-
-        total_size = total_size.checked_add(size)
-            .ok_or_else(|| invalid("Request too large"))?;
-
-        if total_size > MAX_REQUEST_SIZE {
-            return Err(invalid("Request too large"));
-        }
-
-        let mut data = vec![0u8; size];
-        reader.read_exact(&mut data)?;
-
-        let mut ending = [0u8; 2];
-        reader.read_exact(&mut ending)?;
-
-        if ending != *b"\r\n" {
-            return Err(invalid("Missing CRLF"));
-        }
-
-        args.push(data);
-    }
-
-    Ok(Some(args))
-}
-
-// Compose and send a response to the client according to the RESP2 protocol.
+// Compose a response according to the RESP2 protocol.
 pub fn write_response<W: Write>(
     writer: &mut W,
     value: &RespValue,
@@ -172,53 +85,143 @@ fn write_line<W: Write>(
     writer.write_all(b"\r\n")
 }
 
+#[derive(Debug)]
+pub enum ParseError {
+    Invalid(&'static str),
+    TooLarge(&'static str),
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn parses_get_request() {
-        let bytes = b"*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n";
-        let mut reader = Cursor::new(bytes);
-
-        let request = read_request(&mut reader).unwrap().unwrap();
-
-        assert_eq!(
-            request,
-            vec![b"GET".to_vec(), b"foo".to_vec()]
-        );
-    }
-
-    #[test]
-    fn encodes_null_bulk_string() {
-        let mut output = Vec::new();
-
-        write_response(
-            &mut output,
-            &RespValue::BulkString(None)
-        ).unwrap();
-
-        assert_eq!(output, b"$-1\r\n");
-    }
-
-    #[test]
-    fn parses_pipelined_requests() {
-        let bytes = b"*1\r\n$4\r\nPING\r\n\
-                      *2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n";
-
-        let mut reader = Cursor::new(bytes);
-
-        let first = read_request(&mut reader).unwrap().unwrap();
-        let second = read_request(&mut reader).unwrap().unwrap();
-
-        assert_eq!(first, vec![b"PING".to_vec()]);
-        assert_eq!(
-            second,
-            vec![b"GET".to_vec(), b"foo".to_vec()]
-        );
-
-        assert!(read_request(&mut reader).unwrap().is_none());
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(s) | Self::TooLarge(s) => {
+                write!(f, "{s}")
+            }
+        }
     }
 }
+
+impl std::error::Error for ParseError {}
+
+fn parse_length(
+    input: &[u8],
+    start: usize,
+) -> Result<Option<(usize, usize)>, ParseError> {
+    let remaining = &input[start..];
+
+    let newline = remaining
+        .iter()
+        .take(MAX_HEADER_LEN)
+        .position(|&b| b == b'\n');
+
+    let Some(newline) = newline else {
+        return if remaining.len() >= MAX_HEADER_LEN {
+            Err(ParseError::TooLarge("Header too long"))
+        }
+        else {
+            Ok(None)
+        };
+    };
+
+    if newline == 0 || remaining[newline - 1] != b'\r' {
+        return Err(ParseError::Invalid("Expected CRLF"));
+    }
+
+    let digits = &remaining[..newline - 1];
+
+    if digits.is_empty() || !digits.iter().all(|b| b.is_ascii_digit()) {
+        return Err(ParseError::Invalid("Invalid length"));
+    }
+
+    let length = std::str::from_utf8(digits)
+        .map_err(|_| ParseError::Invalid("Invalid length"))?
+        .parse::<usize>()
+        .map_err(|_| ParseError::Invalid("Length out of range"))?;
+
+    Ok(Some((length, start + newline + 1)))
+}
+
+pub fn parse_request(
+    input: &[u8],
+) -> Result<Option<(Vec<Vec<u8>>, usize)>, ParseError> {
+    if input.is_empty() {
+        return Ok(None);
+    }
+
+    if input[0] != b'*' {
+        return Err(ParseError::Invalid("Expected RESP array"));
+    }
+
+    // Get array element count from the command
+    let Some((count, mut cursor)) = parse_length(input, 1)? else {
+        return Ok(None);
+    };
+
+    if count == 0 || count > MAX_ARGS {
+        return Err(ParseError::Invalid("Invalid argument count"));
+    }
+
+    let mut ranges: Vec<Range<usize>> = Vec::with_capacity(count);
+    let mut total_size = 0usize;
+
+    for _ in 0..count {
+        let Some(&prefix) = input.get(cursor) else {
+            return Ok(None);
+        };
+
+        if prefix != b'$' {
+            return Err(ParseError::Invalid("Expected bulk string"));
+        }
+
+        // Get the payload (bulk string) size and location within input buffer
+        let Some((size, start)) = parse_length(input, cursor + 1)?
+        else {
+            return Ok(None);
+        };
+
+        if size > MAX_BULK_SIZE {
+            return Err(ParseError::TooLarge("Bulk string too large"));
+        }
+
+        total_size = total_size
+            .checked_add(size)
+            .ok_or(ParseError::TooLarge("Request too large"))?;
+
+        if total_size > MAX_REQUEST_SIZE {
+            return Err(ParseError::TooLarge("Request too large"));
+        }
+
+        let end = start
+            .checked_add(size)
+            .and_then(|n| n.checked_add(2))
+            .ok_or(ParseError::TooLarge("Request too large"))?;
+
+        // Check if all relevant data for the payload has been received
+        if end > input.len() {
+            return Ok(None);
+        }
+
+        let payload_end = start + size;
+
+        if &input[payload_end..end] != b"\r\n" {
+            return Err(ParseError::Invalid("Missing CRLF"));
+        }
+
+        ranges.push(start..payload_end);
+        cursor = end;
+    }
+
+    // Only allocate argument payloads after the whole request has 
+    // been validated.
+    let args = ranges
+        .into_iter()
+        .map(|range| input[range].to_vec())
+        .collect();
+
+    Ok(Some((args, cursor)))
+}
+
+
+#[cfg(test)]
+#[path = "resp_tests.rs"]
+mod resp_tests;

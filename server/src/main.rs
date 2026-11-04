@@ -1,10 +1,12 @@
 mod command;
 mod db;
+mod connection;
 
 use std::io;
-use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+
+use tokio::net::TcpListener;
 
 use crate::db::DbError;
 
@@ -30,12 +32,8 @@ fn cleanup(db: &Arc<RwLock<db::Database>>) {
     }
 }
 
-/// Handle an incoming request from a client.
-fn handle_client(stream: TcpStream, db: &Arc<RwLock<db::Database>>) -> io::Result<()> {
-    command::handle_command(stream, db)
-}
-
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     let db = Arc::new(RwLock::new(db::Database::new()));
 
     // Start periodic cleanup thread
@@ -49,18 +47,19 @@ fn main() -> io::Result<()> {
         }
     });
 
-    // Handle clients
-    let listener = TcpListener::bind("127.0.0.1:43210")?;
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let db = Arc::clone(&db); 
+    // Handle clients asynchronously
+    let listener = TcpListener::bind("127.0.0.1:43210").await?;
 
-        std::thread::spawn(move || {
-            if let Err(error) = handle_client(stream, &db) {
+    loop {
+        let (stream, _) = listener.accept().await?;
+
+        let db = Arc::clone(&db);
+
+        tokio::spawn(async move {
+            if let Err(error) = command::handle_command(stream, &db).await
+            {
                 eprintln!("Client error: {error}");
             }
         });
     }
-
-    Ok(())
 }

@@ -1,32 +1,28 @@
 use crate::db::{Database, DbError, SetCondition, SetOptions, TTL, Value, StringValue};
+use crate::connection::Connection;
 
-use std::io::{self, BufReader};
-use std::net::TcpStream;
+use std::io;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use tokio::net::TcpStream;
+
 use common::resp::{
-    read_request,
-    write_response,
     RespValue,
 };
 
 /// Read a command received by a client and write the requisite response.
-pub fn handle_command(
+pub async fn handle_command(
     stream: TcpStream, 
     db: &Arc<RwLock<Database>>
 ) -> io::Result<()> {
-    let mut reader = BufReader::new(stream);
+    let mut connection = Connection::new(stream);
 
-    loop {
-        let args = match read_request(&mut reader)? {
-            Some(args) => args,
-            None => break
-        };
-
+    while let Some(args) = connection.read_request().await? {
+        // NOTE: Synchronous database operation execution
         let response = execute(&args, db);
 
-        write_response(reader.get_mut(), &response)?;
+        connection.write_response(&response).await?;
     }
 
     Ok(())
@@ -475,3 +471,7 @@ fn remove_if_expired(
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "connection_tokio_tests.rs"]
+mod tokio_tests;

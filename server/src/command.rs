@@ -484,3 +484,7 @@ fn remove_if_expired(
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "command_tokio_tests.rs"]
+mod tokio_tests;

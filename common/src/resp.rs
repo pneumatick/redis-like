@@ -314,3 +314,7 @@ mod tests {
         assert!(read_request(&mut reader).unwrap().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "resp_tokio_tests.rs"]
+mod tokio_tests;

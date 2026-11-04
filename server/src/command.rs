@@ -5,13 +5,9 @@ use std::io;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use common::resp::{
-    //read_request,
-    read_request_async,
-    write_response,
     RespValue,
 };
 
@@ -477,5 +473,5 @@ fn remove_if_expired(
 mod command_tests;
 
 #[cfg(test)]
-#[path = "command_tokio_tests.rs"]
+#[path = "connection_tokio_tests.rs"]
 mod tokio_tests;
